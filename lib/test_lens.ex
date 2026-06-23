@@ -1,0 +1,93 @@
+defmodule TestLens do
+  @moduledoc """
+  Capture what a test actually does — its input, action and result — and write
+  it out as a structured "case" that a viewer can render as input → action →
+  output, without rewriting the test.
+
+  Two projects can share this one library. The portable core is value capture at
+  stage boundaries (`stage/1` + `capture/3`). An optional database-delta layer
+  (`TestLens.Ecto`) enriches cases for projects that run on a clean Ecto repo.
+
+  ## Wiring (in `test/test_helper.exs`)
+
+      TestLens.start(project: "havi", dir: "test_lens_out")
+      ExUnit.start(formatters: [ExUnit.CLIFormatter, TestLens.Formatter])
+
+  ## Using it in a test
+
+      use TestLens.Case   # auto-begins a capture per test
+
+      test "creates an annotation", ctx do
+        TestLens.stage(:setup)
+        TestLens.capture("signed-in user", user)
+
+        TestLens.stage(:action)
+        TestLens.capture("POST /api/annotations", request, kind: :http_request)
+
+        TestLens.stage(:verify)
+        TestLens.capture("response", response, kind: :http_response)
+      end
+  """
+
+  alias TestLens.Recorder
+
+  @doc "Start the capture recorder. Call once from test_helper.exs before ExUnit.start/1."
+  def start(opts \\ []) do
+    Recorder.start_link(opts)
+  end
+
+  @doc "Begin capturing for the current test. Driven by `use TestLens.Case`."
+  def begin(context) do
+    Recorder.begin(%{
+      module: context.module,
+      name: context.test,
+      pid: self(),
+      file: context[:file],
+      line: context[:line],
+      tags: collect_tags(context)
+    })
+  end
+
+  @doc "Mark the current stage. Subsequent captures are filed under it."
+  def stage(stage) when is_atom(stage) or is_binary(stage) do
+    Recorder.put_stage(self(), to_string(stage))
+  end
+
+  @doc """
+  Record a value at the current stage.
+
+  `kind` controls how the viewer renders it: `:json`, `:text`, `:table`,
+  `:http_request`, `:http_response`. Auto-detected from the value when omitted.
+  """
+  def capture(label, value, opts \\ []) do
+    kind = opts[:kind] || detect_kind(value)
+    Recorder.add_capture(self(), to_string(label), to_string(kind), value, opts[:stage])
+    value
+  end
+
+  @doc "Sugar: capture a value as input (no stage change)."
+  def input(label, value, opts \\ []), do: capture(label, value, opts)
+
+  @doc "Sugar: switch to the action stage and capture the action."
+  def action(label, value, opts \\ []) do
+    stage(:action)
+    capture(label, value, opts)
+  end
+
+  @doc "Sugar: switch to the verify stage and capture the result."
+  def output(label, value, opts \\ []) do
+    stage(:verify)
+    capture(label, value, opts)
+  end
+
+  defp detect_kind(value) when is_binary(value), do: :text
+  defp detect_kind(value) when is_map(value) or is_list(value), do: :json
+  defp detect_kind(_), do: :json
+
+  defp collect_tags(context) do
+    context
+    |> Map.get(:registered, %{})
+    |> Map.keys()
+    |> Enum.map(&to_string/1)
+  end
+end
