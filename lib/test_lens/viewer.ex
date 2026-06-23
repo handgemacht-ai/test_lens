@@ -1,8 +1,12 @@
 defmodule TestLens.Viewer do
   @moduledoc """
-  Render captured cases into a single self-contained HTML file: per test, the
-  input → action → result flow, with database deltas shown inline on the stage
-  that caused them. Knows nothing about any project — only the case format.
+  Render captured cases into a single self-contained HTML file: a virtualized
+  specimen tray on the left, and per test the input → action → result refraction
+  on the right, with database deltas shown inline on the stage that caused them.
+
+  Built to scan thousands of tests at once — only the visible tray rows live in
+  the DOM, and the heavy flow renders for the selected specimen alone. Knows
+  nothing about any project — only the case format (`schema: "test_lens/v1"`).
 
       TestLens.Viewer.build(dir: "test_lens_out")
   """
@@ -37,206 +41,524 @@ defmodule TestLens.Viewer do
     <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>TestLens</title>
+    <title>Test Lens</title>
     <style>
+      @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&display=swap');
+
       :root {
-        --bg: #0d1117; --panel: #161b22; --panel-2: #1c2230; --border: #2d333b;
-        --text: #e6edf3; --muted: #8b949e; --accent: #58a6ff;
-        --ok: #3fb950; --fail: #f85149; --skip: #d29922; --db: #bc8cff;
+        --bg: #090b10; --bg-2: #0c0f16; --panel: #11151e; --panel-2: #161b27;
+        --line: #222a38; --line-2: #2c3445; --text: #e9ecf3; --muted: #8a93a6;
+        --faint: #5a6378;
+        --gold: #f4b740;          /* the single UI accent: instrument readout */
+        --pass: #45d49a; --fail: #fb6f78; --skip: #6b7488;
+        --in: #41c9e3; --act: #a98bff; --out: #fb7faf;   /* refraction channels */
+        --ins: #45d49a; --del: #fb6f78; --upd: #f4b740;  /* delta signs */
+        --mono: ui-monospace, "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace;
+        --display: "Space Grotesk", system-ui, "Segoe UI", sans-serif;
+        --row-h: 32px;
       }
+
       * { box-sizing: border-box; }
+      html, body { height: 100%; }
       body {
         margin: 0; background: var(--bg); color: var(--text);
-        font: 14px/1.5 ui-sans-serif, -apple-system, "Segoe UI", Roboto, sans-serif;
+        font: 13.5px/1.55 var(--mono);
+        -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility;
+        display: grid; grid-template-rows: auto 1fr; height: 100vh; overflow: hidden;
       }
-      header {
-        padding: 22px 28px; border-bottom: 1px solid var(--border);
-        background: linear-gradient(180deg, #11161f, var(--bg));
-        position: sticky; top: 0; z-index: 5; backdrop-filter: blur(6px);
+
+      /* ---------- instrument header ---------- */
+      .bar {
+        display: flex; align-items: center; gap: 26px;
+        padding: 13px 22px; border-bottom: 1px solid var(--line);
+        background: linear-gradient(180deg, #0d1019, var(--bg));
       }
-      h1 { margin: 0; font-size: 18px; letter-spacing: .3px; }
-      h1 span { color: var(--accent); }
-      .sub { color: var(--muted); margin-top: 4px; font-size: 12.5px; }
-      .controls { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 14px; }
-      .chip {
-        border: 1px solid var(--border); background: var(--panel); color: var(--text);
-        padding: 5px 12px; border-radius: 999px; cursor: pointer; font-size: 12.5px;
-        transition: all .15s ease; user-select: none;
+      .brand { display: flex; align-items: center; gap: 11px; flex: none; }
+      .mark {
+        width: 22px; height: 22px; border-radius: 50%;
+        background: conic-gradient(from 210deg, var(--in), var(--act), var(--out), var(--in));
+        -webkit-mask: radial-gradient(circle 6.5px at 50% 50%, transparent 98%, #000 100%);
+                mask: radial-gradient(circle 6.5px at 50% 50%, transparent 98%, #000 100%);
+        filter: saturate(.85); flex: none;
       }
-      .chip:hover { border-color: var(--accent); transform: translateY(-1px); }
-      .chip.active { background: var(--accent); border-color: var(--accent); color: #0d1117; font-weight: 600; }
-      main { padding: 24px 28px; max-width: 1200px; margin: 0 auto; }
-      .case {
-        border: 1px solid var(--border); border-radius: 12px; background: var(--panel);
-        margin-bottom: 20px; overflow: hidden; transition: border-color .15s ease;
+      .word { font: 600 16px/1 var(--display); letter-spacing: 3px; }
+      .word i { color: var(--gold); font-style: normal; margin: 0 1px; }
+
+      .readout { display: flex; align-items: center; gap: 16px; min-width: 0; }
+      .meter {
+        width: 132px; height: 6px; border-radius: 999px;
+        background: rgba(255,255,255,.06); overflow: hidden; flex: none;
+        box-shadow: inset 0 0 0 1px var(--line);
       }
-      .case:hover { border-color: #3d444d; }
-      .case-head { display: flex; align-items: center; gap: 12px; padding: 14px 18px; border-bottom: 1px solid var(--border); }
-      .dot { width: 10px; height: 10px; border-radius: 50%; flex: none; }
-      .dot.passed { background: var(--ok); box-shadow: 0 0 8px var(--ok); }
-      .dot.failed { background: var(--fail); box-shadow: 0 0 8px var(--fail); }
-      .dot.skipped, .dot.excluded, .dot.invalid, .dot.unknown { background: var(--skip); }
-      .case-name { font-weight: 600; font-size: 14.5px; }
-      .case-meta { color: var(--muted); font-size: 12px; margin-top: 2px; }
-      .badge {
-        margin-left: auto; font-size: 11px; padding: 3px 9px; border-radius: 6px;
-        background: var(--panel-2); border: 1px solid var(--border); color: var(--muted);
-        white-space: nowrap;
+      .meter span { display: block; height: 100%; background: linear-gradient(90deg, var(--pass), #6ee7b7); }
+      .nums { display: flex; align-items: baseline; gap: 7px; flex-wrap: wrap; }
+      .nums .n { font: 600 14px/1 var(--display); letter-spacing: .3px; }
+      .nums .n.pass { color: var(--pass); } .nums .n.fail { color: var(--fail); } .nums .n.skip { color: var(--skip); }
+      .nums .nl { color: var(--faint); font-size: 11px; letter-spacing: .4px; margin-right: 4px; }
+      .nums .sep { width: 1px; height: 13px; background: var(--line-2); margin: 0 4px; }
+
+      /* ---------- bench ---------- */
+      .bench { display: grid; grid-template-columns: 372px 1fr; min-height: 0; }
+
+      /* ---------- tray (left) ---------- */
+      .tray { display: flex; flex-direction: column; min-height: 0; border-right: 1px solid var(--line); background: var(--bg-2); }
+      .tools { padding: 12px 14px 10px; border-bottom: 1px solid var(--line); display: flex; flex-direction: column; gap: 9px; }
+      .q {
+        width: 100%; height: 34px; padding: 0 12px; border-radius: 8px;
+        background: var(--panel); border: 1px solid var(--line); color: var(--text);
+        font: 13px var(--mono); outline: none; transition: border-color .14s, box-shadow .14s;
       }
-      .flow { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 0; }
-      .stage { padding: 16px 18px; border-right: 1px solid var(--border); min-width: 0; }
-      .stage:last-child { border-right: none; }
-      .stage-title {
-        font-size: 11px; text-transform: uppercase; letter-spacing: 1.2px; color: var(--muted);
-        margin-bottom: 12px; display: flex; align-items: center; gap: 7px;
+      .q::placeholder { color: var(--faint); }
+      .q:focus { border-color: var(--gold); box-shadow: 0 0 0 3px rgba(244,183,64,.12); }
+
+      .seg { display: flex; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+      .seg button {
+        flex: 1; appearance: none; background: transparent; border: 0; cursor: pointer;
+        color: var(--muted); font: 600 11.5px/1 var(--mono); letter-spacing: .3px;
+        padding: 8px 4px; display: flex; align-items: center; justify-content: center; gap: 5px;
+        border-right: 1px solid var(--line); transition: background .12s, color .12s;
       }
-      .stage-title::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--accent); }
-      .stage[data-stage="action"] .stage-title::before { background: var(--skip); }
-      .stage[data-stage="verify"] .stage-title::before { background: var(--ok); }
-      .item { margin-bottom: 14px; }
-      .item:last-child { margin-bottom: 0; }
-      .label { font-size: 12px; color: var(--muted); margin-bottom: 5px; }
-      .label b { color: var(--text); font-weight: 600; }
-      pre {
-        margin: 0; background: var(--bg); border: 1px solid var(--border); border-radius: 8px;
-        padding: 10px 12px; overflow-x: auto; font: 12px/1.55 ui-monospace, "SF Mono", Menlo, monospace;
-        white-space: pre-wrap; word-break: break-word;
+      .seg button:last-child { border-right: 0; }
+      .seg button:hover { color: var(--text); }
+      .seg button.on { background: rgba(244,183,64,.13); color: var(--gold); }
+      .seg button .c { font-size: 10.5px; color: var(--faint); }
+      .seg button.on .c { color: var(--gold); }
+
+      .tools-row { display: flex; align-items: center; gap: 12px; justify-content: space-between; }
+      .toggle { display: inline-flex; align-items: center; gap: 7px; cursor: pointer; color: var(--muted); font-size: 11.5px; letter-spacing: .2px; user-select: none; }
+      .toggle input { appearance: none; width: 30px; height: 17px; border-radius: 999px; background: var(--panel-2); border: 1px solid var(--line); position: relative; cursor: pointer; transition: background .15s; flex: none; }
+      .toggle input::after { content: ""; position: absolute; top: 1px; left: 1px; width: 13px; height: 13px; border-radius: 50%; background: var(--faint); transition: transform .15s, background .15s; }
+      .toggle input:checked { background: rgba(244,183,64,.22); border-color: var(--gold); }
+      .toggle input:checked::after { transform: translateX(13px); background: var(--gold); }
+      .proj { background: var(--panel); border: 1px solid var(--line); color: var(--muted); border-radius: 7px; padding: 6px 8px; font: 11.5px var(--mono); outline: none; }
+
+      .traycount { padding: 7px 16px; color: var(--faint); font-size: 11px; letter-spacing: .3px; border-bottom: 1px solid var(--line); flex: none; }
+      .traycount b { color: var(--muted); font-weight: 600; }
+
+      .scroller { position: relative; overflow: auto; flex: 1; min-height: 0; outline: none; }
+      .scroller:focus-visible { box-shadow: inset 0 0 0 2px rgba(244,183,64,.4); }
+      .sizer { position: relative; width: 100%; }
+      .layer { position: absolute; top: 0; left: 0; right: 0; will-change: transform; }
+
+      .row { height: var(--row-h); display: flex; align-items: center; width: 100%; padding: 0 14px 0 0; }
+      .row.group {
+        gap: 8px; cursor: pointer; color: var(--muted); background: var(--bg);
+        border-top: 1px solid var(--line); border-bottom: 1px solid var(--line);
+        padding-left: 10px; font-size: 12px;
       }
-      .kv { display: grid; grid-template-columns: auto 1fr; gap: 2px 10px; font: 12px/1.5 ui-monospace, monospace; margin: 4px 0 8px; }
+      .row.group:hover { color: var(--text); }
+      .caret { color: var(--faint); transition: transform .12s; display: inline-block; width: 12px; text-align: center; }
+      .caret.col { transform: rotate(-90deg); }
+      .gm { font-weight: 600; letter-spacing: .2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: 1; }
+      .gtally { display: flex; gap: 9px; flex: none; font-size: 11px; }
+      .gtally i { font-style: normal; }
+      .gtally .t-ok { color: var(--faint); } .gtally .t-fail { color: var(--fail); } .gtally .t-skip { color: var(--skip); }
+
+      .row.test {
+        appearance: none; background: transparent; border: 0; text-align: left; cursor: pointer;
+        gap: 9px; padding-left: 14px; color: var(--text); font: 12.5px var(--mono);
+        border-left: 2px solid transparent; transition: background .1s;
+      }
+      .row.test:hover { background: rgba(255,255,255,.025); }
+      .row.test.sel { background: rgba(244,183,64,.09); border-left-color: var(--gold); }
+      .g { width: 3px; height: 15px; border-radius: 2px; flex: none; background: var(--faint); }
+      .g.pass { background: var(--pass); } .g.fail { background: var(--fail); box-shadow: 0 0 7px rgba(251,111,120,.6); } .g.skip { background: var(--skip); }
+      .rn { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+      .rn .rmod { color: var(--faint); }
+      .rmeta { display: flex; align-items: center; gap: 8px; flex: none; color: var(--faint); font-size: 11px; }
+      .sh { display: inline-flex; gap: 2px; }
+      .sh i { width: 4px; height: 4px; border-radius: 50%; background: #2a3140; display: inline-block; }
+      .sh i.in { background: var(--in); } .sh i.act { background: var(--act); } .sh i.out { background: var(--out); }
+      .dur { font-variant-numeric: tabular-nums; }
+      .dbt { color: var(--upd); background: rgba(244,183,64,.12); border-radius: 4px; padding: 1px 5px; font-size: 10px; }
+
+      .nomatch { padding: 40px 20px; text-align: center; color: var(--faint); font-size: 12.5px; }
+
+      /* ---------- stage view (right) ---------- */
+      .stage-view { overflow: auto; min-height: 0; background: var(--bg); }
+      .spec { padding: 24px 28px 60px; max-width: 1280px; margin: 0 auto; }
+      @media (prefers-reduced-motion: no-preference) {
+        .spec { animation: focusin .18s ease both; }
+        @keyframes focusin { from { opacity: 0; transform: translateY(5px); filter: blur(1.5px); } to { opacity: 1; transform: none; filter: none; } }
+      }
+
+      .spec-head { display: flex; align-items: flex-start; gap: 13px; padding-bottom: 18px; border-bottom: 1px solid var(--line); }
+      .g.big { height: 38px; width: 4px; }
+      .spec-id { min-width: 0; flex: 1; }
+      .spec-name { font: 600 18px/1.3 var(--display); letter-spacing: -.01em; word-break: break-word; }
+      .spec-sub { color: var(--muted); font-size: 12px; margin-top: 5px; }
+      .spec-sub .mono { color: var(--text); }
+      .spec-sub .dim { color: var(--faint); }
+      .spec-sub .st { text-transform: uppercase; letter-spacing: .6px; font-weight: 600; font-size: 11px; }
+      .spec-sub .st.pass { color: var(--pass); } .spec-sub .st.fail { color: var(--fail); } .spec-sub .st.skip { color: var(--skip); }
+      .spec-side { margin-left: auto; display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; max-width: 40%; }
+      .tag { font-size: 10.5px; color: var(--muted); background: var(--panel-2); border: 1px solid var(--line); border-radius: 999px; padding: 3px 9px; white-space: nowrap; }
+      .tag.proj { color: var(--gold); border-color: rgba(244,183,64,.3); }
+      .spec-back { display: none; appearance: none; background: var(--panel); border: 1px solid var(--line); color: var(--text); border-radius: 8px; padding: 7px 12px; font: 600 12px var(--mono); cursor: pointer; margin-bottom: 16px; }
+
+      /* the refraction beam: rings align over the channel columns below */
+      .beam { display: grid; gap: 0; position: relative; margin: 22px 0 0; height: 30px; }
+      .beam::before { content: ""; position: absolute; left: 8%; right: 8%; top: 14px; height: 2px;
+        background: linear-gradient(90deg, var(--in), var(--act), var(--out)); opacity: .55; border-radius: 2px; }
+      .ap { display: flex; align-items: center; justify-content: center; position: relative; }
+      .ring { width: 13px; height: 13px; border-radius: 50%; background: var(--bg); position: relative; z-index: 1; box-shadow: 0 0 0 2px currentColor, 0 0 12px currentColor; }
+      .ap.in { color: var(--in); } .ap.act { color: var(--act); } .ap.out { color: var(--out); }
+
+      .axis { display: grid; gap: 14px; margin-top: 6px; align-items: start; }
+      .chan { border: 1px solid var(--line); border-radius: 12px; background: var(--panel); overflow: hidden; min-width: 0; }
+      .chan-h { display: flex; align-items: center; gap: 8px; padding: 11px 14px; font: 600 11px/1 var(--display); letter-spacing: 1.6px; border-bottom: 1px solid var(--line); }
+      .chan.in .chan-h { color: var(--in); } .chan.act .chan-h { color: var(--act); } .chan.out .chan-h { color: var(--out); }
+      .chan-h .ci { font: 600 10px/1 var(--mono); opacity: .6; letter-spacing: 0; }
+      .chan-body { padding: 13px 14px; }
+      .chan.in { box-shadow: inset 3px 0 0 -1px var(--in); }
+      .chan.act { box-shadow: inset 3px 0 0 -1px var(--act); }
+      .chan.out { box-shadow: inset 3px 0 0 -1px var(--out); }
+
+      .item { margin-bottom: 13px; } .item:last-child { margin-bottom: 0; }
+      .ilabel { color: var(--muted); font-size: 11.5px; margin-bottom: 5px; }
+      .ilabel b { color: var(--text); font-weight: 600; }
+      .none { color: var(--faint); font-style: italic; font-size: 12px; }
+
+      pre { margin: 0; background: var(--bg); border: 1px solid var(--line); border-radius: 8px;
+        padding: 9px 11px; overflow-x: auto; font: 12px/1.55 var(--mono);
+        white-space: pre-wrap; word-break: break-word; }
+      .kv { display: grid; grid-template-columns: auto 1fr; gap: 2px 12px; font: 12px/1.5 var(--mono); margin: 4px 0; }
       .kv .k { color: var(--muted); }
-      .http-line { font: 12.5px/1.5 ui-monospace, monospace; margin-bottom: 6px; }
-      .method { color: var(--skip); font-weight: 700; }
-      .status-201, .status-200 { color: var(--ok); font-weight: 700; }
-      .status-4, .status-5 { color: var(--fail); font-weight: 700; }
-      .db {
-        border: 1px dashed var(--db); border-radius: 8px; padding: 9px 11px; margin-bottom: 14px;
-        background: rgba(188, 140, 255, .06);
+      .httpline { font: 12.5px/1.5 var(--mono); margin-bottom: 7px; }
+      .method { color: var(--act); font-weight: 700; }
+      .scode.ok { color: var(--pass); font-weight: 700; } .scode.bad { color: var(--fail); font-weight: 700; }
+
+      .delta { border-radius: 8px; padding: 9px 11px; margin-bottom: 11px; border: 1px solid var(--line); background: var(--bg-2); }
+      .delta-h { display: flex; align-items: center; gap: 8px; font-size: 11.5px; margin-bottom: 7px; }
+      .delta .sign { font-weight: 800; width: 15px; height: 15px; display: inline-flex; align-items: center; justify-content: center; border-radius: 4px; font-size: 12px; }
+      .delta.ins { border-color: rgba(69,212,154,.4); } .delta.ins .sign { color: var(--ins); background: rgba(69,212,154,.14); }
+      .delta.del { border-color: rgba(251,111,120,.4); } .delta.del .sign { color: var(--del); background: rgba(251,111,120,.14); }
+      .delta.upd { border-color: rgba(244,183,64,.4); }  .delta.upd .sign { color: var(--upd); background: rgba(244,183,64,.14); }
+      .delta .op { font-weight: 700; letter-spacing: .5px; } .delta .src { color: var(--muted); }
+      .delta pre { background: var(--bg); }
+
+      .json-key { color: #79c0ff; } .json-str { color: #8dd1a6; } .json-num { color: #f0a45a; } .json-bool { color: #ff9a8d; }
+
+      .prompt { height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 16px; color: var(--faint); text-align: center; padding: 40px; }
+      .prompt .lens { width: 64px; height: 64px; border-radius: 50%;
+        background: conic-gradient(from 210deg, var(--in), var(--act), var(--out), var(--in));
+        -webkit-mask: radial-gradient(circle 22px at 50% 50%, transparent 96%, #000 100%);
+                mask: radial-gradient(circle 22px at 50% 50%, transparent 96%, #000 100%);
+        opacity: .5; }
+      .prompt h2 { margin: 0; font: 600 15px var(--display); color: var(--muted); letter-spacing: .3px; }
+      .prompt p { margin: 0; font-size: 12px; max-width: 320px; }
+      .prompt kbd { font: 11px var(--mono); background: var(--panel-2); border: 1px solid var(--line); border-radius: 4px; padding: 1px 6px; color: var(--muted); }
+
+      /* ---------- responsive floor ---------- */
+      @media (max-width: 880px) {
+        .bench { grid-template-columns: 1fr; }
+        .stage-view { display: none; }
+        body.focus .tray { display: none; }
+        body.focus .stage-view { display: block; }
+        .spec-back { display: inline-flex; }
+        .spec-side { max-width: 50%; }
       }
-      .db-op { font-size: 11px; font-weight: 700; color: var(--db); letter-spacing: .5px; }
-      .db-op .src { color: var(--text); font-weight: 600; }
-      .json-key { color: #79c0ff; }
-      .json-str { color: #a5d6ff; }
-      .json-num { color: #f0883e; }
-      .json-bool { color: #ff7b72; }
-      .empty { color: var(--muted); font-style: italic; font-size: 12px; }
-      footer { color: var(--muted); text-align: center; padding: 20px; font-size: 12px; }
     </style>
     </head>
     <body>
-    <header>
-      <h1><span>Test</span>Lens</h1>
-      <div class="sub">__COUNT__ captured test cases · input → action → result</div>
-      <div class="controls" id="filters"></div>
-    </header>
-    <main id="cases"></main>
-    <footer>Rendered from test_lens/v1 case files · one viewer, any project</footer>
+      <header class="bar">
+        <div class="brand"><span class="mark" aria-hidden="true"></span><span class="word">TEST<i>&middot;</i>LENS</span></div>
+        <div class="readout" id="readout"></div>
+      </header>
 
-    <script id="data" type="application/json">__CASES_JSON__</script>
-    <script>
-    const CASES = JSON.parse(document.getElementById("data").textContent);
-    const STAGE_ORDER = ["setup", "action", "verify"];
-    let projectFilter = "all", statusFilter = "all";
+      <div class="bench">
+        <aside class="tray">
+          <div class="tools">
+            <input id="q" class="q" type="search" placeholder="Filter by name or module" aria-label="Filter specimens" />
+            <div class="seg" id="statusSeg" role="group" aria-label="Status filter"></div>
+            <div class="tools-row">
+              <label class="toggle"><input type="checkbox" id="groupBy" checked /> group by module</label>
+              <select id="proj" class="proj" aria-label="Project filter"></select>
+            </div>
+          </div>
+          <div class="traycount" id="traycount"></div>
+          <div class="scroller" id="scroller" tabindex="0" aria-label="Specimen list">
+            <div class="sizer" id="sizer"><div class="layer" id="layer"></div></div>
+            <div class="nomatch" id="nomatch" hidden>No specimens match this filter.</div>
+          </div>
+        </aside>
+        <section class="stage-view" id="detail"></section>
+      </div>
 
-    function esc(s){ return String(s).replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c])); }
+      <script id="data" type="application/json">__CASES_JSON__</script>
+      <script>
+      const CASES = JSON.parse(document.getElementById("data").textContent);
+      const ROW_H = 32, OVERSCAN = 8;
 
-    function jsonHtml(v){
-      const json = JSON.stringify(v, null, 2);
-      return esc(json)
-        .replace(/&quot;([^&]+)&quot;(\s*:)/g, '<span class="json-key">"$1"</span>$2')
-        .replace(/: (&quot;[^]*?&quot;)(,?)$/gm, ': <span class="json-str">$1</span>$2')
-        .replace(/: (-?\d+\.?\d*)(,?)$/gm, ': <span class="json-num">$1</span>$2')
-        .replace(/: (true|false|null)(,?)$/gm, ': <span class="json-bool">$1</span>$2');
-    }
-
-    function kv(obj){
-      if(!obj || typeof obj !== "object") return "";
-      return '<div class="kv">' + Object.entries(obj)
-        .map(([k,v]) => '<div class="k">'+esc(k)+'</div><div>'+esc(typeof v==="object"?JSON.stringify(v):v)+'</div>')
-        .join("") + '</div>';
-    }
-
-    function statusClass(code){
-      const c = String(code);
-      if(c[0]==="4") return "status-4"; if(c[0]==="5") return "status-5"; return "status-"+c;
-    }
-
-    function renderValue(item){
-      const v = item.value;
-      if(item.kind === "http_request"){
-        return '<div class="http-line"><span class="method">'+esc(v.method)+'</span> '+esc(v.path)+'</div>'
-          + (v.headers ? kv(v.headers) : "")
-          + (v.body ? '<pre>'+jsonHtml(v.body)+'</pre>' : "");
-      }
-      if(item.kind === "http_response"){
-        return '<div class="http-line">HTTP <span class="'+statusClass(v.status)+'">'+esc(v.status)+'</span></div>'
-          + (v.headers ? kv(v.headers) : "")
-          + (v.body ? '<pre>'+jsonHtml(v.body)+'</pre>' : "");
-      }
-      if(item.kind === "text") return '<pre>'+esc(v)+'</pre>';
-      return '<pre>'+jsonHtml(v)+'</pre>';
-    }
-
-    function renderDb(ev){
-      return '<div class="db"><div class="db-op">'+esc(ev.op)+' <span class="src">'+esc(ev.source||"")+'</span></div>'
-        + '<pre>'+esc(ev.sql)+'</pre>'
-        + (ev.params && ev.params.length ? '<div class="label">params</div><pre>'+jsonHtml(ev.params)+'</pre>' : '')
-        + '</div>';
-    }
-
-    function stagesOf(c){
-      const items = (c.captures||[]).map(x => ({...x, _t:"cap"}))
-        .concat((c.db_events||[]).map(x => ({...x, _t:"db"})));
-      const byStage = {};
-      for(const it of items){ (byStage[it.stage] = byStage[it.stage] || []).push(it); }
-      const names = Object.keys(byStage).sort((a,b) => {
-        const ia = STAGE_ORDER.indexOf(a), ib = STAGE_ORDER.indexOf(b);
-        return (ia<0?99:ia) - (ib<0?99:ib);
+      CASES.forEach((c, i) => {
+        c._id = i;
+        c._dbn = (c.db_events || []).length;
+        c._dur = c.duration_us != null ? c.duration_us / 1000 : null;
       });
-      return names.map(name => {
-        const sorted = byStage[name].sort((a,b)=>a.seq-b.seq);
-        const body = sorted.map(it => it._t==="db"
-          ? renderDb(it)
-          : '<div class="item"><div class="label"><b>'+esc(it.label)+'</b></div>'+renderValue(it)+'</div>'
-        ).join("");
-        return '<div class="stage" data-stage="'+esc(name)+'"><div class="stage-title">'+esc(name)+'</div>'+body+'</div>';
-      }).join("");
-    }
 
-    function renderCases(){
-      const main = document.getElementById("cases");
-      const list = CASES.filter(c =>
-        (projectFilter==="all" || c.project===projectFilter) &&
-        (statusFilter==="all" || c.status===statusFilter));
-      if(!list.length){ main.innerHTML = '<p class="empty">No cases match.</p>'; return; }
-      main.innerHTML = list.map(c =>
-        '<div class="case">'
-        + '<div class="case-head"><div class="dot '+esc(c.status)+'"></div>'
-        + '<div><div class="case-name">'+esc(c.name)+'</div>'
-        + '<div class="case-meta">'+esc(c.module)+' · '+esc(c.file||"")+(c.line?":"+c.line:"")
-        + (c.duration_us!=null ? ' · '+(c.duration_us/1000).toFixed(1)+'ms' : '')+'</div></div>'
-        + '<div class="badge">'+esc(c.project)+'</div></div>'
-        + '<div class="flow">'+stagesOf(c)+'</div>'
-        + '</div>'
-      ).join("");
-    }
+      let search = "", statusF = "all", projF = "all", groupBy = true;
+      const collapsed = new Set();
+      let selectedId = null;
+      let rows = [];
 
-    function renderFilters(){
-      const projects = ["all", ...new Set(CASES.map(c=>c.project))];
-      const statuses = ["all", ...new Set(CASES.map(c=>c.status))];
-      const box = document.getElementById("filters");
-      const mk = (val, cur, set, prefix) =>
-        '<div class="chip'+(val===cur?" active":"")+'" data-set="'+set+'" data-val="'+esc(val)+'">'+prefix+esc(val)+'</div>';
-      box.innerHTML = projects.map(p=>mk(p, projectFilter, "project", "project: ")).join("")
-        + statuses.map(s=>mk(s, statusFilter, "status", "status: ")).join("");
-      box.querySelectorAll(".chip").forEach(ch => ch.onclick = () => {
-        if(ch.dataset.set==="project") projectFilter = ch.dataset.val; else statusFilter = ch.dataset.val;
-        renderFilters(); renderCases();
+      const $ = id => document.getElementById(id);
+      const esc = s => String(s).replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+      const escA = s => esc(s).replace(/"/g, '&quot;');
+      const kind = s => s === "passed" ? "pass" : (s === "skipped" || s === "excluded") ? "skip" : "fail";
+      const sev = c => { const k = kind(c.status); return k === "fail" ? 0 : k === "skip" ? 1 : 2; };
+
+      /* ---------- readout ---------- */
+      function renderReadout() {
+        const t = CASES.length;
+        const pass = CASES.filter(c => kind(c.status) === "pass").length;
+        const fail = CASES.filter(c => kind(c.status) === "fail").length;
+        const skip = t - pass - fail;
+        const db = CASES.reduce((n, c) => n + c._dbn, 0);
+        const rate = t ? (pass / t * 100) : 0;
+        $("readout").innerHTML =
+          `<div class="meter" title="${rate.toFixed(1)}% passing"><span style="width:${rate}%"></span></div>` +
+          `<div class="nums">` +
+            `<b class="n">${t.toLocaleString()}</b><span class="nl">specimens</span>` +
+            `<span class="sep"></span>` +
+            `<b class="n pass">${pass.toLocaleString()}</b><span class="nl">pass</span>` +
+            `<b class="n fail">${fail.toLocaleString()}</b><span class="nl">fail</span>` +
+            `<b class="n skip">${skip.toLocaleString()}</b><span class="nl">skip</span>` +
+            `<span class="sep"></span>` +
+            `<b class="n">${db.toLocaleString()}</b><span class="nl">db writes</span>` +
+          `</div>`;
+      }
+
+      /* ---------- controls ---------- */
+      function renderControls() {
+        const counts = { all: CASES.length, pass: 0, fail: 0, skip: 0 };
+        CASES.forEach(c => counts[kind(c.status)]++);
+        const segs = [["all", "All"], ["fail", "Fail"], ["skip", "Skip"], ["pass", "Pass"]];
+        $("statusSeg").innerHTML = segs.map(([v, l]) =>
+          `<button data-st="${v}" class="${v === statusF ? "on" : ""}">${l}<span class="c">${counts[v].toLocaleString()}</span></button>`).join("");
+        $("statusSeg").querySelectorAll("button").forEach(b => b.onclick = () => {
+          statusF = b.dataset.st; renderControls(); rebuild(true);
+        });
+
+        const projects = [...new Set(CASES.map(c => c.project).filter(Boolean))];
+        const proj = $("proj");
+        if (projects.length <= 1) { proj.style.display = "none"; }
+        else {
+          proj.style.display = "";
+          proj.innerHTML = ['<option value="all">all projects</option>']
+            .concat(projects.map(p => `<option value="${escA(p)}">${esc(p)}</option>`)).join("");
+          proj.value = projF;
+          proj.onchange = () => { projF = proj.value; rebuild(true); };
+        }
+      }
+
+      /* ---------- row model ---------- */
+      function buildRows() {
+        const q = search.trim().toLowerCase();
+        const list = CASES.filter(c =>
+          (statusF === "all" || kind(c.status) === statusF) &&
+          (projF === "all" || c.project === projF) &&
+          (!q || c.name.toLowerCase().includes(q) || (c.module || "").toLowerCase().includes(q)));
+
+        if (!groupBy) {
+          list.sort((a, b) => sev(a) - sev(b) || (a.module || "").localeCompare(b.module || "") || (a.line || 0) - (b.line || 0));
+          return { rows: list.map(c => ({ type: "test", id: c._id })), tests: list.length, mods: new Set(list.map(c => c.module)).size };
+        }
+
+        const groups = {};
+        list.forEach(c => (groups[c.module] || (groups[c.module] = [])).push(c));
+        Object.values(groups).forEach(g => g.sort((a, b) => sev(a) - sev(b) || (a.line || 0) - (b.line || 0) || a.name.localeCompare(b.name)));
+        const mods = Object.keys(groups).sort((a, b) => {
+          const fa = groups[a].filter(c => kind(c.status) === "fail").length;
+          const fb = groups[b].filter(c => kind(c.status) === "fail").length;
+          return (fb - fa) || a.localeCompare(b);
+        });
+        const out = [];
+        mods.forEach(m => {
+          const g = groups[m];
+          const pass = g.filter(c => kind(c.status) === "pass").length;
+          const fail = g.filter(c => kind(c.status) === "fail").length;
+          out.push({ type: "group", module: m, pass, fail, skip: g.length - pass - fail });
+          if (!collapsed.has(m)) g.forEach(c => out.push({ type: "test", id: c._id }));
+        });
+        return { rows: out, tests: list.length, mods: mods.length };
+      }
+
+      function shape(c) {
+        const has = { setup: false, action: false, verify: false };
+        (c.captures || []).forEach(x => { if (x.stage in has) has[x.stage] = true; });
+        (c.db_events || []).forEach(x => { if (x.stage in has) has[x.stage] = true; });
+        return `<span class="sh"><i class="${has.setup ? "in" : ""}"></i><i class="${has.action ? "act" : ""}"></i><i class="${has.verify ? "out" : ""}"></i></span>`;
+      }
+
+      function rowHtml(r) {
+        if (r.type === "group") {
+          const col = collapsed.has(r.module);
+          return `<div class="row group" data-mod="${escA(r.module)}">` +
+            `<span class="caret ${col ? "col" : ""}">&#9662;</span>` +
+            `<span class="gm" title="${escA(r.module)}">${esc(r.module)}</span>` +
+            `<span class="gtally">${r.fail ? `<i class="t-fail">${r.fail}&#10007;</i>` : ""}${r.skip ? `<i class="t-skip">${r.skip}&#8856;</i>` : ""}<i class="t-ok">${r.pass}&#10003;</i></span>` +
+          `</div>`;
+        }
+        const c = CASES[r.id];
+        const k = kind(c.status);
+        const mod = groupBy ? "" : `<span class="rmod">${esc(c.module)} &rsaquo; </span>`;
+        return `<button class="row test${r.id === selectedId ? " sel" : ""}" data-id="${r.id}">` +
+          `<span class="g ${k}"></span>` +
+          `<span class="rn" title="${escA(c.name)}">${mod}${esc(c.name)}</span>` +
+          `<span class="rmeta">${shape(c)}${c._dur != null ? `<span class="dur">${c._dur.toFixed(1)}ms</span>` : ""}${c._dbn ? `<span class="dbt">&#43;${c._dbn}</span>` : ""}</span>` +
+        `</button>`;
+      }
+
+      /* ---------- virtualized paint ---------- */
+      const scroller = $("scroller"), sizer = $("sizer"), layer = $("layer");
+      function paint() {
+        const st = scroller.scrollTop, h = scroller.clientHeight;
+        const start = Math.max(0, Math.floor(st / ROW_H) - OVERSCAN);
+        const end = Math.min(rows.length, Math.ceil((st + h) / ROW_H) + OVERSCAN);
+        layer.style.transform = `translateY(${start * ROW_H}px)`;
+        let html = "";
+        for (let i = start; i < end; i++) html += rowHtml(rows[i]);
+        layer.innerHTML = html;
+      }
+      scroller.addEventListener("scroll", () => requestAnimationFrame(paint), { passive: true });
+
+      function rebuild(resetScroll) {
+        const r = buildRows();
+        rows = r.rows;
+        sizer.style.height = (rows.length * ROW_H) + "px";
+        $("nomatch").hidden = rows.length > 0;
+        $("traycount").innerHTML = `<b>${r.tests.toLocaleString()}</b> tests` + (groupBy ? ` &middot; <b>${r.mods.toLocaleString()}</b> modules` : "");
+        if (resetScroll) scroller.scrollTop = 0;
+        paint();
+      }
+
+      /* ---------- detail / refraction ---------- */
+      function jsonHtml(v) {
+        return esc(JSON.stringify(v, null, 2))
+          .replace(/&quot;([^&]+)&quot;(\s*:)/g, '<span class="json-key">"$1"</span>$2')
+          .replace(/: (&quot;[^]*?&quot;)(,?)$/gm, ': <span class="json-str">$1</span>$2')
+          .replace(/: (-?\d+\.?\d*)(,?)$/gm, ': <span class="json-num">$1</span>$2')
+          .replace(/: (true|false|null)(,?)$/gm, ': <span class="json-bool">$1</span>$2');
+      }
+      function kvHtml(obj) {
+        if (!obj || typeof obj !== "object") return "";
+        return '<div class="kv">' + Object.entries(obj)
+          .map(([k, v]) => `<div class="k">${esc(k)}</div><div>${esc(typeof v === "object" ? JSON.stringify(v) : v)}</div>`).join("") + "</div>";
+      }
+      function renderValue(it) {
+        const v = it.value;
+        if (it.kind === "http_request")
+          return `<div class="httpline"><span class="method">${esc(v.method)}</span> ${esc(v.path)}</div>` +
+            (v.headers ? kvHtml(v.headers) : "") + (v.body ? `<pre>${jsonHtml(v.body)}</pre>` : "");
+        if (it.kind === "http_response") {
+          const cls = String(v.status)[0] >= "4" ? "bad" : "ok";
+          return `<div class="httpline">HTTP <span class="scode ${cls}">${esc(v.status)}</span></div>` +
+            (v.headers ? kvHtml(v.headers) : "") + (v.body ? `<pre>${jsonHtml(v.body)}</pre>` : "");
+        }
+        if (it.kind === "text") return `<pre>${esc(v)}</pre>`;
+        return `<pre>${jsonHtml(v)}</pre>`;
+      }
+      function deltaHtml(ev) {
+        const op = (ev.op || "").toUpperCase();
+        const map = op.startsWith("INSERT") ? ["ins", "&#43;"] : op.startsWith("DELETE") ? ["del", "&#8722;"] : op.startsWith("UPDATE") ? ["upd", "~"] : ["upd", "&middot;"];
+        return `<div class="delta ${map[0]}"><div class="delta-h"><span class="sign">${map[1]}</span><span class="op">${esc(ev.op)}</span><span class="src">${esc(ev.source || "")}</span></div>` +
+          `<pre>${esc(ev.sql)}</pre>` +
+          (ev.params && ev.params.length ? `<div class="ilabel">params</div><pre>${jsonHtml(ev.params)}</pre>` : "") + "</div>";
+      }
+      function buildStages(c) {
+        const defs = [["setup", "INPUT", "in", "I"], ["action", "ACTION", "act", "II"], ["verify", "RESULT", "out", "III"]];
+        const items = { setup: [], action: [], verify: [] };
+        (c.captures || []).forEach(x => (items[x.stage] || (items[x.stage] = [])).push({ ...x, _t: "cap" }));
+        (c.db_events || []).forEach(x => (items[x.stage] || (items[x.stage] = [])).push({ ...x, _t: "db" }));
+        Object.values(items).forEach(a => a.sort((p, q) => (p.seq || 0) - (q.seq || 0)));
+        const stages = defs.map(([k, label, key, idx]) => ({ key, label, idx, items: items[k] || [] }));
+        Object.keys(items).forEach(k => { if (!["setup", "action", "verify"].includes(k)) stages.push({ key: "act", label: k.toUpperCase(), idx: "&middot;", items: items[k] }); });
+        return stages;
+      }
+      function itemHtml(it) {
+        if (it._t === "db") return deltaHtml(it);
+        const bare = it.kind === "http_request" || it.kind === "http_response";
+        return `<div class="item">${bare ? "" : `<div class="ilabel"><b>${esc(it.label)}</b></div>`}${renderValue(it)}</div>`;
+      }
+      function emptyPrompt() {
+        return `<div class="prompt"><div class="lens"></div><h2>Select a specimen</h2>` +
+          `<p>Pick a test from the tray to see it refracted into input, action and result. Use <kbd>&uarr;</kbd> <kbd>&darr;</kbd> to step through, <kbd>/</kbd> to filter.</p></div>`;
+      }
+      function renderDetail() {
+        const d = $("detail");
+        if (selectedId == null) { d.innerHTML = emptyPrompt(); return; }
+        const c = CASES[selectedId];
+        const stages = buildStages(c);
+        const tags = [].concat(c.tags || []).map(t => `<span class="tag">${esc(String(t))}</span>`).join("");
+        d.innerHTML =
+          `<div class="spec">` +
+            `<button class="spec-back" id="back">&larr; specimens</button>` +
+            `<div class="spec-head"><span class="g ${kind(c.status)} big"></span>` +
+              `<div class="spec-id"><div class="spec-name">${esc(c.name)}</div>` +
+                `<div class="spec-sub"><span class="mono">${esc(c.module)}</span>` +
+                  `<span class="dim">${c.file ? ` &middot; ${esc(c.file)}${c.line ? ":" + c.line : ""}` : ""}</span>` +
+                  `${c._dur != null ? ` &middot; ${c._dur.toFixed(1)}ms` : ""} &middot; <span class="st ${kind(c.status)}">${esc(c.status)}</span></div>` +
+              `</div>` +
+              `<div class="spec-side">${tags}${c.project ? `<span class="tag proj">${esc(c.project)}</span>` : ""}</div>` +
+            `</div>` +
+            `<div class="beam" style="grid-template-columns:repeat(${stages.length},1fr)">${stages.map(s => `<div class="ap ${s.key}"><span class="ring"></span></div>`).join("")}</div>` +
+            `<div class="axis" style="grid-template-columns:repeat(${stages.length},1fr)">` +
+              stages.map(s => `<div class="chan ${s.key}"><div class="chan-h"><span class="ci">${s.idx}</span>${s.label}</div>` +
+                `<div class="chan-body">${s.items.length ? s.items.map(itemHtml).join("") : '<div class="none">nothing captured here</div>'}</div></div>`).join("") +
+            `</div>` +
+          `</div>`;
+        const back = $("back");
+        if (back) back.onclick = () => document.body.classList.remove("focus");
+      }
+
+      function select(id) {
+        selectedId = id;
+        if (window.innerWidth <= 880) document.body.classList.add("focus");
+        renderDetail();
+        // refresh sel highlight in the visible window
+        paint();
+      }
+
+      /* ---------- interactions ---------- */
+      layer.addEventListener("click", e => {
+        const grp = e.target.closest(".row.group");
+        if (grp) { const m = grp.dataset.mod; collapsed.has(m) ? collapsed.delete(m) : collapsed.add(m); rebuild(false); return; }
+        const row = e.target.closest(".row.test");
+        if (row) select(+row.dataset.id);
       });
-    }
 
-    renderFilters();
-    renderCases();
-    </script>
+      let qt;
+      $("q").addEventListener("input", e => { clearTimeout(qt); qt = setTimeout(() => { search = e.target.value; rebuild(true); }, 110); });
+      $("groupBy").addEventListener("change", e => { groupBy = e.target.checked; rebuild(true); });
+
+      document.addEventListener("keydown", e => {
+        if (e.key === "/" && document.activeElement !== $("q")) { e.preventDefault(); $("q").focus(); return; }
+        if (e.key === "Escape" && document.activeElement === $("q")) { $("q").blur(); return; }
+        if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
+        if (document.activeElement === $("q")) return;
+        e.preventDefault();
+        const testRows = rows.map((r, i) => r.type === "test" ? i : -1).filter(i => i >= 0);
+        if (!testRows.length) return;
+        const cur = rows.findIndex(r => r.type === "test" && r.id === selectedId);
+        let pos = testRows.indexOf(cur);
+        pos = e.key === "ArrowDown" ? Math.min(testRows.length - 1, pos + 1) : Math.max(0, pos - 1);
+        if (pos < 0) pos = 0;
+        const idx = testRows[pos];
+        selectedId = rows[idx].id;
+        const top = idx * ROW_H;
+        if (top < scroller.scrollTop) scroller.scrollTop = top;
+        else if (top + ROW_H > scroller.scrollTop + scroller.clientHeight) scroller.scrollTop = top + ROW_H - scroller.clientHeight;
+        renderDetail(); paint();
+      });
+
+      /* ---------- boot ---------- */
+      renderReadout();
+      renderControls();
+      rebuild(true);
+      const first = rows.find(r => r.type === "test");
+      if (first && window.innerWidth > 880) { selectedId = first.id; renderDetail(); paint(); }
+      else renderDetail();
+      </script>
     </body>
     </html>
     """
