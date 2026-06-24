@@ -150,6 +150,48 @@ defmodule TestLens.DoltTest do
            "expected HTML to reference kind 'dolt_op'"
   end
 
+  test "Viewer.build renders unknown kind via generic fallback and escapes malicious line/label values" do
+    module = TestLens.DoltTest.SafetyRegressionSynthetic
+    name = :"test render safety fixes"
+
+    Recorder.begin(%{
+      module: module,
+      name: name,
+      pid: self(),
+      file: __ENV__.file,
+      line: __ENV__.line,
+      tags: []
+    })
+
+    Recorder.put_stage(self(), "action")
+
+    # kind that collides with Object.prototype — must not crash, must fall back to JSON
+    Recorder.add_capture(
+      self(),
+      "<script>alert(1)</script>",
+      "constructor",
+      %{safe: true},
+      "action"
+    )
+
+    # additional capture for verify stage
+    Recorder.add_capture(self(), "output", "text", "normal", "verify")
+
+    assert {:ok, _path} = Recorder.finish(module, name, "passed", 100)
+
+    dir = Application.get_env(:test_lens, :dir, "test_lens_out")
+    {:ok, html_path, _count} = Viewer.build(dir: dir)
+    html = File.read!(html_path)
+
+    # JSON for the "constructor" kind capture must be embedded (generic fallback)
+    assert String.contains?(html, ~s("kind":"constructor")),
+           "expected constructor kind to appear in embedded JSON"
+
+    # malicious label must not appear unescaped
+    refute String.contains?(html, "<script>alert(1)</script>"),
+           "expected script tag in label to be escaped, not raw"
+  end
+
   test "Viewer.build shows db_writes 0 for a dolt_op-only case" do
     module = TestLens.DoltTest.DbZeroViewer
     name = :"test viewer db writes zero"
