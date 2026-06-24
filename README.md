@@ -85,6 +85,71 @@ ordered list of `captures` (each with a stage, label, render `kind`, and
 value), and any `db_events`. The viewer only knows this format — it knows
 nothing about any specific project, so the same viewer renders every project.
 
+## Writing a capture adapter (collect → transform → render)
+
+Any external source — a message queue, a cache layer, a version-control
+system, a billing event — can be surfaced in the viewer without touching the
+TestLens core. The contract has three steps:
+
+### 1. Collect
+
+Call `TestLens.capture/3` with a `kind:` option set to your source's kind
+string. The recorder accepts any kind string — no core change required:
+
+```elixir
+TestLens.capture("dolt commit", op_map, kind: :dolt_op)
+```
+
+Or call `TestLens.Recorder.add_capture/5` directly when you have the pid but
+not the public helper (e.g. from a telemetry handler):
+
+```elixir
+TestLens.Recorder.add_capture(pid, label, "dolt_op", sanitized_value, nil)
+```
+
+### 2. Transform
+
+Your `value` is whatever map or scalar makes the capture meaningful. Run it
+through `TestLens.JSON.sanitize/1` to make all Elixir types JSON-encodable.
+The capture is stored in `captures` (not `db_events`), so the DB-writes
+counter in the viewer is unaffected.
+
+### 3. Render
+
+The viewer ships a `kindRenderers` JS registry (a plain object in `viewer.ex`)
+that maps `kind -> fn(value) -> html`. If your kind is not registered, the
+viewer falls back to a formatted JSON block — **so a new source needs zero
+core edit** for basic visibility.
+
+To add a styled renderer, add one entry to `kindRenderers`:
+
+```js
+my_kind: v => `<div class="my-widget">${esc(v.label)}</div>`
+```
+
+That one entry is the only change required for a bespoke visual.
+
+### Example: `TestLens.Dolt`
+
+`TestLens.Dolt` is the reference implementation of this contract. It captures
+Dolt version-control operations (commit, branch, merge, diff) and renders them
+as styled VC blocks — an action badge, the branch name, the short commit hash,
+and the commit message. See `lib/test_lens/dolt.ex` for the full source and
+step-by-step commentary.
+
+```elixir
+test "commits a schema migration" do
+  TestLens.stage(:action)
+
+  TestLens.Dolt.capture(self(), %{
+    action: "commit",
+    branch: "feature/add-index",
+    commit_hash: "abc1234",
+    message: "Add index on annotations.org_id"
+  })
+end
+```
+
 ## Why
 
 Code tests answer *"did it pass?"*. A rendered case answers *"is this the

@@ -239,6 +239,21 @@ defmodule TestLens.Viewer do
 
       .json-key { color: #79c0ff; } .json-str { color: #8dd1a6; } .json-num { color: #f0a45a; } .json-bool { color: #ff9a8d; }
 
+      /* ---------- dolt_op capture ---------- */
+      .dolt-op { border-radius: 10px; padding: 10px 13px; border: 1px solid rgba(130,100,220,.35); background: rgba(100,60,200,.07); }
+      .dolt-op-head { display: flex; align-items: center; gap: 9px; margin-bottom: 8px; flex-wrap: wrap; }
+      .dolt-badge { font: 700 10.5px/1 var(--mono); letter-spacing: .8px; text-transform: uppercase; border-radius: 5px; padding: 3px 8px; flex: none; }
+      .dolt-badge.commit { color: #a78bfa; background: rgba(167,139,250,.14); border: 1px solid rgba(167,139,250,.3); }
+      .dolt-badge.branch { color: #34d399; background: rgba(52,211,153,.12); border: 1px solid rgba(52,211,153,.28); }
+      .dolt-badge.merge  { color: #f472b6; background: rgba(244,114,182,.12); border: 1px solid rgba(244,114,182,.28); }
+      .dolt-badge.diff   { color: #60a5fa; background: rgba(96,165,250,.12); border: 1px solid rgba(96,165,250,.28); }
+      .dolt-badge.other  { color: var(--muted); background: var(--panel-2); border: 1px solid var(--line); }
+      .dolt-hash { font: 600 11px/1 var(--mono); color: var(--faint); background: var(--bg); border: 1px solid var(--line); border-radius: 4px; padding: 2px 7px; letter-spacing: .5px; }
+      .dolt-branch { font: 12px/1 var(--mono); color: var(--muted); }
+      .dolt-branch::before { content: "⎇ "; color: var(--faint); font-size: 10px; }
+      .dolt-msg { font: 13px/1.5 var(--mono); color: var(--text); margin-top: 2px; }
+      .dolt-result { margin-top: 8px; }
+
       .prompt { height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 16px; color: var(--faint); text-align: center; padding: 40px; }
       .prompt .lens { width: 64px; height: 64px; border-radius: 50%;
         background: conic-gradient(from 210deg, var(--in), var(--act), var(--out), var(--in));
@@ -445,18 +460,53 @@ defmodule TestLens.Viewer do
         return '<div class="kv">' + Object.entries(obj)
           .map(([k, v]) => `<div class="k">${esc(k)}</div><div>${esc(typeof v === "object" ? JSON.stringify(v) : v)}</div>`).join("") + "</div>";
       }
-      function renderValue(it) {
-        const v = it.value;
-        if (it.kind === "http_request")
-          return `<div class="httpline"><span class="method">${esc(v.method)}</span> ${esc(v.path)}</div>` +
-            (v.headers ? kvHtml(v.headers) : "") + (v.body ? `<pre>${jsonHtml(v.body)}</pre>` : "");
-        if (it.kind === "http_response") {
+      /* ---------- kind → renderer registry ----------
+         Each entry is a function (value, item) -> HTML string.
+         Unknown kinds fall back to the generic JSON block.
+         To add a new capture source: register one entry here.
+         The collect and transform steps need no core change at all.
+      --------------------------------------------------------- */
+      const kindRenderers = {
+        http_request: v =>
+          `<div class="httpline"><span class="method">${esc(v.method)}</span> ${esc(v.path)}</div>` +
+          (v.headers ? kvHtml(v.headers) : "") + (v.body ? `<pre>${jsonHtml(v.body)}</pre>` : ""),
+
+        http_response: v => {
           const cls = String(v.status)[0] >= "4" ? "bad" : "ok";
           return `<div class="httpline">HTTP <span class="scode ${cls}">${esc(v.status)}</span></div>` +
             (v.headers ? kvHtml(v.headers) : "") + (v.body ? `<pre>${jsonHtml(v.body)}</pre>` : "");
+        },
+
+        text: v => `<pre>${esc(v)}</pre>`,
+
+        dolt_op: v => {
+          const action = (v.action || "op").toLowerCase();
+          const knownActions = ["commit", "branch", "merge", "diff"];
+          const badgeCls = knownActions.includes(action) ? action : "other";
+          const badge = `<span class="dolt-badge ${badgeCls}">${esc(action)}</span>`;
+          const hash = v.commit_hash
+            ? `<span class="dolt-hash">${esc(String(v.commit_hash).slice(0, 7))}</span>`
+            : "";
+          const branch = v.branch
+            ? `<span class="dolt-branch">${esc(v.branch)}</span>`
+            : "";
+          const msg = v.message
+            ? `<div class="dolt-msg">${esc(v.message)}</div>`
+            : "";
+          const result = v.result != null
+            ? `<div class="dolt-result"><pre>${jsonHtml(v.result)}</pre></div>`
+            : "";
+          return `<div class="dolt-op">` +
+            `<div class="dolt-op-head">${badge}${hash}${branch}</div>` +
+            msg + result +
+            `</div>`;
         }
-        if (it.kind === "text") return `<pre>${esc(v)}</pre>`;
-        return `<pre>${jsonHtml(v)}</pre>`;
+      };
+
+      function renderValue(it) {
+        const renderer = kindRenderers[it.kind];
+        if (renderer) return renderer(it.value, it);
+        return `<pre>${jsonHtml(it.value)}</pre>`;
       }
       function deltaHtml(ev) {
         const op = (ev.op || "").toUpperCase();
