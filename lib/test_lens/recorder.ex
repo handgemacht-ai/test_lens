@@ -25,10 +25,16 @@ defmodule TestLens.Recorder do
 
   def add_db_event(pid, event), do: cast({:db_event, pid, event})
 
-  @doc "Flush a finished test to disk. Returns {:ok, path} | :ignored."
-  def finish(module, name, status, duration_us) do
+  @doc """
+  Flush a finished test to disk. Returns {:ok, path} | :ignored.
+
+  `meta` (`:file`, `:line`, `:tags`) lets a test that never called `begin/1`
+  still be written as a status-only case, so a suite with no shared case module
+  renders as a catalog from the test_helper wiring alone.
+  """
+  def finish(module, name, status, duration_us, meta \\ %{}) do
     if alive?(),
-      do: GenServer.call(@name, {:finish, module, name, status, duration_us}),
+      do: GenServer.call(@name, {:finish, module, name, status, duration_us, meta}),
       else: :ignored
   end
 
@@ -101,18 +107,33 @@ defmodule TestLens.Recorder do
   end
 
   @impl true
-  def handle_call({:finish, module, name, status, duration_us}, _from, state) do
+  def handle_call({:finish, module, name, status, duration_us, meta}, _from, state) do
     key = {module, name}
 
-    case Map.fetch(state.by_key, key) do
-      {:ok, acc} ->
-        path = write_case(state, acc, status, duration_us)
-        pids = state.pids |> Enum.reject(fn {_pid, k} -> k == key end) |> Map.new()
-        {:reply, {:ok, path}, %{state | by_key: Map.delete(state.by_key, key), pids: pids}}
+    acc =
+      case Map.fetch(state.by_key, key) do
+        {:ok, acc} -> acc
+        :error -> blank_acc(module, name, meta)
+      end
 
-      :error ->
-        {:reply, :ignored, state}
-    end
+    path = write_case(state, acc, status, duration_us)
+    pids = state.pids |> Enum.reject(fn {_pid, k} -> k == key end) |> Map.new()
+    {:reply, {:ok, path}, %{state | by_key: Map.delete(state.by_key, key), pids: pids}}
+  end
+
+  # A test that never called begin/1 (no `use TestLens.Case`) still gets a
+  # status-only case from what the formatter already knows about it.
+  defp blank_acc(module, name, meta) do
+    %{
+      module: inspect(module),
+      name: to_string(name),
+      file: relative(meta[:file]),
+      line: meta[:line],
+      tags: meta[:tags] || [],
+      stage: "setup",
+      captures: [],
+      db_events: []
+    }
   end
 
   defp write_case(state, acc, status, duration_us) do

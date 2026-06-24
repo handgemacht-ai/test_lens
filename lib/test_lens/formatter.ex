@@ -14,11 +14,23 @@ defmodule TestLens.Formatter do
 
   @impl true
   def handle_cast({:test_finished, test}, state) do
-    Recorder.finish(test.module, test.name, status(test.state), test.time)
+    Recorder.finish(test.module, test.name, status(test.state), test.time, meta(test))
     {:noreply, state}
   end
 
   def handle_cast(_event, state), do: {:noreply, state}
+
+  # What the formatter knows even when the test never called begin/1 — enough to
+  # write a status-only case for suites with no shared case module.
+  defp meta(test) do
+    tags = test.tags || %{}
+
+    %{
+      file: tags[:file],
+      line: tags[:line],
+      tags: tags |> Map.get(:registered, %{}) |> Map.keys() |> Enum.map(&to_string/1)
+    }
+  end
 
   defp status(nil), do: "passed"
   defp status({:failed, _}), do: "failed"
