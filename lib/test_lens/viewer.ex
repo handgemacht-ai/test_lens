@@ -504,7 +504,7 @@ defmodule TestLens.Viewer do
       };
 
       function renderValue(it) {
-        const renderer = kindRenderers[it.kind];
+        const renderer = Object.prototype.hasOwnProperty.call(kindRenderers, it.kind) ? kindRenderers[it.kind] : null;
         if (renderer) return renderer(it.value, it);
         return `<pre>${jsonHtml(it.value)}</pre>`;
       }
@@ -546,14 +546,14 @@ defmodule TestLens.Viewer do
             `<div class="spec-head"><span class="g ${kind(c.status)} big"></span>` +
               `<div class="spec-id"><div class="spec-name">${esc(c.name)}</div>` +
                 `<div class="spec-sub"><span class="mono">${esc(c.module)}</span>` +
-                  `<span class="dim">${c.file ? ` &middot; ${esc(c.file)}${c.line ? ":" + c.line : ""}` : ""}</span>` +
+                  `<span class="dim">${c.file ? ` &middot; ${esc(c.file)}${c.line ? ":" + esc(String(c.line)) : ""}` : ""}</span>` +
                   `${c._dur != null ? ` &middot; ${c._dur.toFixed(1)}ms` : ""} &middot; <span class="st ${kind(c.status)}">${esc(c.status)}</span></div>` +
               `</div>` +
               `<div class="spec-side">${tags}${c.project ? `<span class="tag proj">${esc(c.project)}</span>` : ""}</div>` +
             `</div>` +
             `<div class="beam" style="grid-template-columns:repeat(${stages.length},1fr)">${stages.map(s => `<div class="ap ${s.key}"><span class="ring"></span></div>`).join("")}</div>` +
             `<div class="axis" style="grid-template-columns:repeat(${stages.length},1fr)">` +
-              stages.map(s => `<div class="chan ${s.key}"><div class="chan-h"><span class="ci">${s.idx}</span>${s.label}</div>` +
+              stages.map(s => `<div class="chan ${s.key}"><div class="chan-h"><span class="ci">${s.idx}</span>${esc(s.label)}</div>` +
                 `<div class="chan-body">${s.items.length ? s.items.map(itemHtml).join("") : '<div class="none">nothing captured here</div>'}</div></div>`).join("") +
             `</div>` +
           `</div>`;
