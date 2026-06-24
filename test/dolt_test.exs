@@ -40,7 +40,7 @@ defmodule TestLens.DoltTest do
 
     case_data = path |> File.read!() |> Jason.decode!()
 
-    assert case_data["schema"] == "test_lens/v1"
+    assert case_data["schema"] == "test_lens/v1.1"
     assert length(case_data["captures"]) == 1
     assert case_data["db_events"] == []
 

@@ -64,6 +64,31 @@ TestLens.Viewer.build(dir: "test_lens_out")
 Open `test_lens_out/index.html`. Each test is one card: input → action →
 result, with database changes shown inline on the stage that caused them.
 
+## Annotate what matters
+
+A capture records the *whole* value — the entire response body, the full result
+map. That is deliberate: record broadly so nothing is lost. But a reader should
+not have to hunt through a forty-field response to find the one field the test
+is really about. So the author **annotates** the path(s) that matter, and the
+viewer floats them as a gold `path = value` readout above the value and
+highlights the matched key inside the expanded JSON.
+
+```elixir
+TestLens.capture("response", response.body,
+  annotate: [["data", "creator"], ["meta", "version"]]
+)
+```
+
+- Record everything; annotate only the field(s) under test.
+- Each path is a list of keys (atoms or strings) and/or integer list indices,
+  resolved against the captured value.
+- If a path matches nothing — the shape drifted, or a key was renamed — the
+  viewer shows a visible **"annotation matched no value"** marker instead of
+  rendering nothing. A failed annotation is a signal, not a no-op.
+
+Annotation is purely descriptive: it never changes what is recorded or whether
+the test passes. It only changes what the viewer draws your eye to.
+
 ## Capturing database changes (optional)
 
 For projects on a clean Ecto repo, attach the database-delta layer once in
@@ -80,9 +105,10 @@ no per-test code. Reads are ignored to keep the signal clean.
 ## What a capture looks like
 
 Each test becomes one JSON file (`test_lens_out/cases/*.json`) in a small,
-stable format (`schema: "test_lens/v1"`): the test's identity and status, an
-ordered list of `captures` (each with a stage, label, render `kind`, and
-value), and any `db_events`. The viewer only knows this format — it knows
+stable format (`schema: "test_lens/v1.1"`): the test's identity and status, an
+ordered list of `captures` (each with a stage, label, render `kind`, value, and
+an optional `paths` list of annotations), and any `db_events`. Older
+`test_lens/v1` files that carry no `paths` field still render. The viewer only knows this format — it knows
 nothing about any specific project, so the same viewer renders every project.
 
 ## Writing a capture adapter (collect → transform → render)

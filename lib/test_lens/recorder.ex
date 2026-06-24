@@ -20,8 +20,8 @@ defmodule TestLens.Recorder do
   def begin(meta), do: cast({:begin, meta})
   def put_stage(pid, stage), do: cast({:stage, pid, stage})
 
-  def add_capture(pid, label, kind, value, stage),
-    do: cast({:capture, pid, label, kind, value, stage})
+  def add_capture(pid, label, kind, value, stage, paths \\ []),
+    do: cast({:capture, pid, label, kind, value, stage, paths})
 
   def add_db_event(pid, event), do: cast({:db_event, pid, event})
 
@@ -76,7 +76,7 @@ defmodule TestLens.Recorder do
     {:noreply, update_acc(state, pid, &%{&1 | stage: stage})}
   end
 
-  def handle_cast({:capture, pid, label, kind, value, stage_override}, state) do
+  def handle_cast({:capture, pid, label, kind, value, stage_override, paths}, state) do
     {seq, state} = next_seq(state)
 
     state =
@@ -86,7 +86,8 @@ defmodule TestLens.Recorder do
           label: label,
           kind: kind,
           value: JSON.sanitize(value),
-          seq: seq
+          seq: seq,
+          paths: sanitize_paths(paths)
         }
 
         %{acc | captures: [entry | acc.captures]}
@@ -138,7 +139,7 @@ defmodule TestLens.Recorder do
 
   defp write_case(state, acc, status, duration_us) do
     payload = %{
-      schema: "test_lens/v1",
+      schema: "test_lens/v1.1",
       project: state.project,
       module: acc.module,
       name: acc.name,
@@ -147,7 +148,7 @@ defmodule TestLens.Recorder do
       status: status,
       tags: acc.tags,
       duration_us: duration_us,
-      captures: Enum.reverse(acc.captures),
+      captures: acc.captures |> Enum.reverse() |> Enum.map(&encode_capture/1),
       db_events: Enum.reverse(acc.db_events)
     }
 
@@ -167,6 +168,20 @@ defmodule TestLens.Recorder do
   end
 
   defp next_seq(state), do: {state.seq, %{state | seq: state.seq + 1}}
+
+  defp sanitize_paths(paths) when is_list(paths) do
+    Enum.map(paths, fn path -> Enum.map(List.wrap(path), &path_key/1) end)
+  end
+
+  defp sanitize_paths(_), do: []
+
+  defp path_key(k) when is_integer(k), do: k
+  defp path_key(k) when is_atom(k), do: Atom.to_string(k)
+  defp path_key(k) when is_binary(k), do: k
+  defp path_key(k), do: inspect(k)
+
+  defp encode_capture(%{paths: []} = entry), do: Map.delete(entry, :paths)
+  defp encode_capture(entry), do: entry
 
   defp slug(project, module, name) do
     "#{project}-#{module}-#{name}"

@@ -58,10 +58,15 @@ defmodule TestLens do
 
   `kind` controls how the viewer renders it: `:json`, `:text`, `:table`,
   `:http_request`, `:http_response`. Auto-detected from the value when omitted.
+
+  `annotate` takes a list of paths to highlight on render; each path is a list
+  of keys (atoms or strings) and/or integer indices resolved against the
+  sanitized value, e.g. `annotate: [["data", "creator"]]`.
   """
   def capture(label, value, opts \\ []) do
     kind = opts[:kind] || detect_kind(value)
-    Recorder.add_capture(self(), to_string(label), to_string(kind), value, opts[:stage])
+    paths = opts[:annotate] || []
+    Recorder.add_capture(self(), to_string(label), to_string(kind), value, opts[:stage], paths)
     value
   end
 
