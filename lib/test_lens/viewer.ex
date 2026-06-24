@@ -6,7 +6,8 @@ defmodule TestLens.Viewer do
 
   Built to scan thousands of tests at once — only the visible tray rows live in
   the DOM, and the heavy flow renders for the selected specimen alone. Knows
-  nothing about any project — only the case format (`schema: "test_lens/v1"`).
+  nothing about any project — only the case format (`schema: "test_lens/v1.1"`,
+  and the older `test_lens/v1` files that carry no `paths` field).
 
       TestLens.Viewer.build(dir: "test_lens_out")
   """
@@ -239,6 +240,21 @@ defmodule TestLens.Viewer do
 
       .json-key { color: #79c0ff; } .json-str { color: #8dd1a6; } .json-num { color: #f0a45a; } .json-bool { color: #ff9a8d; }
 
+      /* ---------- annotation readout ---------- */
+      .anno { margin-bottom: 8px; display: flex; flex-direction: column; gap: 5px; }
+      .anno-line {
+        display: inline-flex; align-items: baseline; gap: 8px; align-self: flex-start;
+        border-radius: 7px; padding: 5px 10px; font: 12px/1.4 var(--mono);
+        color: var(--gold); background: rgba(244,183,64,.1);
+        border: 1px solid rgba(244,183,64,.32); box-shadow: 0 0 10px rgba(244,183,64,.12);
+      }
+      .anno-path { color: var(--gold); opacity: .85; }
+      .anno-eq { color: var(--faint); }
+      .anno-val { color: var(--text); font-weight: 600; }
+      .anno-line.miss { color: var(--muted); background: var(--panel-2); border-color: var(--line); box-shadow: none; }
+      .anno-line.miss .anno-val { color: var(--faint); font-style: italic; font-weight: 400; }
+      .hl { border-radius: 3px; padding: 0 2px; background: rgba(244,183,64,.22); box-shadow: 0 0 0 1px rgba(244,183,64,.4); }
+
       /* ---------- dolt_op capture ---------- */
       .dolt-op { border-radius: 10px; padding: 10px 13px; border: 1px solid rgba(130,100,220,.35); background: rgba(100,60,200,.07); }
       .dolt-op-head { display: flex; align-items: center; gap: 9px; margin-bottom: 8px; flex-wrap: wrap; }
@@ -455,6 +471,56 @@ defmodule TestLens.Viewer do
           .replace(/: (-?\d+\.?\d*)(,?)$/gm, ': <span class="json-num">$1</span>$2')
           .replace(/: (true|false|null)(,?)$/gm, ': <span class="json-bool">$1</span>$2');
       }
+      /* ---------- annotation: resolve + highlight ---------- */
+      const PATH_MISS = Symbol("miss");
+      function resolvePath(value, path) {
+        let cur = value;
+        for (const key of path) {
+          if (cur == null) return PATH_MISS;
+          if (Array.isArray(cur)) {
+            if (typeof key !== "number" || key < 0 || key >= cur.length) return PATH_MISS;
+            cur = cur[key];
+          } else if (typeof cur === "object") {
+            const k = String(key);
+            if (!Object.prototype.hasOwnProperty.call(cur, k)) return PATH_MISS;
+            cur = cur[k];
+          } else {
+            return PATH_MISS;
+          }
+        }
+        return cur;
+      }
+      function pathLabel(path) { return path.map(k => String(k)).join("."); }
+      function annoHtml(it) {
+        if (!it.paths || !it.paths.length) return "";
+        const lines = it.paths.map(path => {
+          const resolved = resolvePath(it.value, path);
+          if (resolved === PATH_MISS) {
+            return `<div class="anno-line miss"><span class="anno-path">${esc(pathLabel(path))}</span>` +
+              `<span class="anno-val">annotation matched no value</span></div>`;
+          }
+          const shown = typeof resolved === "object" ? JSON.stringify(resolved) : String(resolved);
+          return `<div class="anno-line"><span class="anno-path">${esc(pathLabel(path))}</span>` +
+            `<span class="anno-eq">=</span><span class="anno-val">${esc(shown)}</span></div>`;
+        }).join("");
+        return `<div class="anno">${lines}</div>`;
+      }
+      // Highlight the matched leaf keys of each annotation path inside the expanded JSON.
+      function jsonHtmlHighlighted(value, paths) {
+        const keys = new Set();
+        (paths || []).forEach(path => {
+          if (!path.length) return;
+          if (resolvePath(value, path) === PATH_MISS) return;
+          const last = path[path.length - 1];
+          if (typeof last !== "number") keys.add(String(last));
+        });
+        let html = jsonHtml(value);
+        keys.forEach(k => {
+          const needle = `<span class="json-key">"${esc(k)}"</span>`;
+          html = html.split(needle).join(`<span class="hl">${needle}</span>`);
+        });
+        return html;
+      }
       function kvHtml(obj) {
         if (!obj || typeof obj !== "object") return "";
         return '<div class="kv">' + Object.entries(obj)
@@ -506,6 +572,7 @@ defmodule TestLens.Viewer do
       function renderValue(it) {
         const renderer = Object.prototype.hasOwnProperty.call(kindRenderers, it.kind) ? kindRenderers[it.kind] : null;
         if (renderer) return renderer(it.value, it);
+        if (it.paths && it.paths.length) return `<pre>${jsonHtmlHighlighted(it.value, it.paths)}</pre>`;
         return `<pre>${jsonHtml(it.value)}</pre>`;
       }
       function deltaHtml(ev) {
@@ -528,7 +595,7 @@ defmodule TestLens.Viewer do
       function itemHtml(it) {
         if (it._t === "db") return deltaHtml(it);
         const bare = it.kind === "http_request" || it.kind === "http_response";
-        return `<div class="item">${bare ? "" : `<div class="ilabel"><b>${esc(it.label)}</b></div>`}${renderValue(it)}</div>`;
+        return `<div class="item">${bare ? "" : `<div class="ilabel"><b>${esc(it.label)}</b></div>`}${annoHtml(it)}${renderValue(it)}</div>`;
       }
       function emptyPrompt() {
         return `<div class="prompt"><div class="lens"></div><h2>Select a specimen</h2>` +
