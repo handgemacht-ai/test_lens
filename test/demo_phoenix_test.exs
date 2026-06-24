@@ -25,4 +25,26 @@ defmodule TestLens.DemoPhoenixTest do
 
     assert conn.status == 201
   end
+
+  test "a rendered page (improper iolist body) does not detach the handler" do
+    handler_id = {TestLens.Phoenix, [:phoenix, :endpoint, :stop]}
+
+    conn = %{
+      method: "GET",
+      request_path: "/pricing",
+      query_string: "",
+      params: %{},
+      status: 200,
+      # Plug hands rendered pages an improper iolist (binary tail), the shape
+      # that previously crashed the handler and silenced capture for the run.
+      resp_body: ["<h1>", "Plans" | "&#39;s</h1>"]
+    }
+
+    :telemetry.execute([:phoenix, :endpoint, :stop], %{duration: 900_000}, %{conn: conn})
+
+    assert Enum.any?(
+             :telemetry.list_handlers([:phoenix, :endpoint, :stop]),
+             &(&1.id == handler_id)
+           )
+  end
 end

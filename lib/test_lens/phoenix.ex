@@ -37,7 +37,15 @@ defmodule TestLens.Phoenix do
   def handle(_event, _measurements, %{conn: conn}, _config), do: record(conn)
   def handle(_event, _measurements, _metadata, _config), do: :ok
 
+  # A raise here would make :telemetry detach the handler for the rest of the
+  # run, so one odd conn must never take the whole suite's capture down with it.
   defp record(conn) do
+    do_record(conn)
+  rescue
+    _ -> :ok
+  end
+
+  defp do_record(conn) do
     pid = self()
 
     request = %{
@@ -65,20 +73,30 @@ defmodule TestLens.Phoenix do
   defp label(conn), do: "#{Map.get(conn, :method)} #{Map.get(conn, :request_path)}"
 
   # Parse the response body as JSON when it looks like JSON; otherwise keep a
-  # bounded string so a large HTML page can't bloat the render.
+  # bounded string so a large HTML page can't bloat the render. resp_body is
+  # iodata and is frequently an improper iolist (binary tail) for rendered
+  # pages, so flatten it to a binary first rather than walking it as a list.
   defp response_body(conn) do
     case Map.get(conn, :resp_body) do
-      body when is_binary(body) ->
-        trimmed = String.slice(body, 0, @max_body)
+      nil ->
+        nil
+
+      body ->
+        trimmed = body |> to_binary() |> String.slice(0, @max_body)
 
         case Jason.decode(trimmed) do
           {:ok, decoded} -> decoded
           _ -> trimmed
         end
-
-      other ->
-        other
     end
+  end
+
+  defp to_binary(body) when is_binary(body), do: body
+
+  defp to_binary(body) do
+    IO.iodata_to_binary(body)
+  rescue
+    _ -> inspect(body)
   end
 
   # Recursively blank out values whose key looks sensitive. Runs before
