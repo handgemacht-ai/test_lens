@@ -35,7 +35,7 @@ TestLens.start(project: "my_app", dir: "test_lens_out")
 ExUnit.start(formatters: [ExUnit.CLIFormatter, TestLens.Formatter])
 ```
 
-**2. Capture in a test** — add `use TestLens.Case` and a few `capture` calls:
+**2. Wrap a test** — add `use TestLens.Case` and wrap each phase in a block:
 
 ```elixir
 defmodule MyApp.CreateBranchTest do
@@ -43,16 +43,26 @@ defmodule MyApp.CreateBranchTest do
   use TestLens.Case
 
   test "creates a branch" do
-    TestLens.stage(:setup)
-    TestLens.capture("candidate name", "feature_login")
+    TestLens.setup do
+      name = "feature_login"
+    end
 
-    result = TestLens.action("create_branch/1", MyApp.create_branch("feature_login"))
+    TestLens.action "create the branch" do
+      result = MyApp.create_branch(name)
+    end
 
-    TestLens.output("returns", result)
-    assert {:ok, %{created: true}} = result
+    TestLens.verify do
+      assert {:ok, %{created: true}} = result
+    end
   end
 end
 ```
+
+Each block runs exactly as written — it just also copies its own **source**
+into the matching channel, so the viewer shows *what the test does*, not only
+the data around it. Variables a block binds (`name`, `result`) stay in scope
+for the rest of the test. The optional string after `action` is a one-line
+description shown above the code.
 
 **3. Build the viewer** after the suite runs:
 
@@ -79,7 +89,11 @@ TestLens.capture("response", response.body,
 )
 ```
 
-- Record everything; annotate only the field(s) under test.
+- Record everything; annotate **only the subject under test** — the one value
+  the test's checks are really about. Many tests have no single such value (a
+  round-trip read, an "it persists" test): those should annotate nothing rather
+  than spotlight an arbitrary field. A highlight is a claim about what matters;
+  don't make it where it isn't true.
 - Each path is a list of keys (atoms or strings) and/or integer list indices,
   resolved against the captured value.
 - If a path matches nothing — the shape drifted, or a key was renamed — the
