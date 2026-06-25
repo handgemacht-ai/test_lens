@@ -18,15 +18,25 @@ defmodule TestLens do
       use TestLens.Case   # auto-begins a capture per test
 
       test "creates an annotation", ctx do
-        TestLens.stage(:setup)
-        TestLens.capture("signed-in user", user)
+        TestLens.setup do
+          user = sign_in()
+        end
 
-        TestLens.stage(:action)
-        TestLens.capture("POST /api/annotations", request, kind: :http_request)
+        TestLens.action "POST /api/annotations" do
+          conn = post(conn, ~p"/api/annotations", params)
+        end
 
-        TestLens.stage(:verify)
-        TestLens.capture("response", response, kind: :http_response)
+        TestLens.verify do
+          assert conn.status == 201
+          TestLens.capture("response", json(conn), annotate: [["data", "id"]])
+        end
       end
+
+  Each `setup`/`action`/`verify` block runs as written — it just also copies its
+  own source into the matching channel so the viewer shows *what the test does*.
+  Variables a block binds stay in scope for the rest of the test. Reach for
+  `capture/3` (with `annotate:`) when one specific value is the subject under
+  test.
   """
 
   alias TestLens.Recorder
@@ -73,16 +83,56 @@ defmodule TestLens do
   @doc "Sugar: capture a value as input (no stage change)."
   def input(label, value, opts \\ []), do: capture(label, value, opts)
 
-  @doc "Sugar: switch to the action stage and capture the action."
-  def action(label, value, opts \\ []) do
-    stage(:action)
-    capture(label, value, opts)
-  end
-
-  @doc "Sugar: switch to the verify stage and capture the result."
+  @doc "Sugar: switch to the verify stage and capture the result value."
   def output(label, value, opts \\ []) do
     stage(:verify)
     capture(label, value, opts)
+  end
+
+  @doc """
+  Wrap the test's setup in a block. The viewer shows the block's source verbatim
+  in the INPUT channel; the code still runs and any variables it binds stay in
+  scope for the rest of the test.
+
+      TestLens.setup do
+        user = insert(:user)
+      end
+  """
+  defmacro setup(description \\ nil, do: block), do: phase(:setup, description, block)
+
+  @doc """
+  Wrap the test's action in a block. The viewer shows the block's source verbatim
+  in the ACTION channel. Pass an optional one-line description of what it does.
+
+      TestLens.action "mint a guest workspace" do
+        conn = post(conn, ~p"/api/guests", params)
+      end
+  """
+  defmacro action(description \\ nil, do: block), do: phase(:action, description, block)
+
+  @doc """
+  Wrap the test's checks in a block. The viewer shows the block's source verbatim
+  in the RESULT channel. Capture the subject under test inside or after it.
+
+      TestLens.verify do
+        assert conn.status == 201
+      end
+  """
+  defmacro verify(description \\ nil, do: block), do: phase(:verify, description, block)
+
+  defp phase(stage, description, block) do
+    source = Macro.to_string(block)
+
+    quote do
+      TestLens.__phase__(unquote(to_string(stage)), unquote(description), unquote(source))
+      unquote(block)
+    end
+  end
+
+  @doc false
+  def __phase__(stage, description, source) do
+    Recorder.put_stage(self(), stage)
+    Recorder.add_capture(self(), description || "", "source", source, stage, [])
   end
 
   defp detect_kind(value) when is_binary(value), do: :text

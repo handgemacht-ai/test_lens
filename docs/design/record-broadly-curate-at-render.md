@@ -1,3 +1,14 @@
+> ## Revision 3 — Author direction (2026-06-25): show the action; annotate only a real subject
+>
+> Two corrections after seeing the first real renders:
+>
+> 1. **The action was invisible.** A pure-data test (akg) carries no telemetry, so its ACTION channel rendered empty — "nothing captured here." Fix: a test is wrapped in three **block macros** — `TestLens.setup do … end`, `TestLens.action "desc" do … end`, `TestLens.verify do … end`. Each macro **copies its block's source text verbatim** into the matching channel (so the viewer shows *what the test does*) and then runs the block unchanged. Because the block is spliced inline, variables it binds stay in scope for later phases — no new scope, same compile behaviour the Rev-2 macro section already required. This supersedes both the binding-capture `phase` macro (§2b) and the zero-annotation float-up heuristic (§3/§4) as the way the channels get populated: the **copied source is the always-present signal**, captures/annotations are the refinement on top. `action` takes an optional one-line description rendered as a caption.
+> 2. **A highlight is a claim — don't make a false one.** The first akg example annotated `predicate = requires`, but that test only verifies data round-trips from Dolt; no single field is "the answer." Rule: **annotate only the subject under test, and only when one genuinely exists.** Round-trip / "it persists" / pure-read tests annotate nothing and rely on the three source lanes. havi's endpoint test keeps its `data.workspace_id` pill because that value *is* what it asserts.
+>
+> Net: `setup`/`action`/`verify` source-copy blocks render the lanes for every test; `capture(..., annotate:)` spotlights the subject under test where there is one. Nothing is auto-decided.
+>
+> ---
+>
 > ## Revision 2 — Author direction (2026-06-24): agents write the tests
 >
 > The product critique assumed human authors who won't annotate, and pushed a zero-annotation auto-surface heuristic. The author corrected this: **tests are authored by agents**, so annotation effort and code volume are not constraints, and migration is incremental. Consequences:

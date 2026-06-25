@@ -10,6 +10,8 @@ defmodule TestLens.Case do
 
   defmacro __using__(_opts) do
     quote do
+      require TestLens
+
       setup context do
         TestLens.begin(context)
         :ok

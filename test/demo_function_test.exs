@@ -9,22 +9,30 @@ defmodule TestLens.DemoFunctionTest do
   alias TestLens.Sample
 
   test "create_branch accepts a clean name" do
-    TestLens.stage(:setup)
-    TestLens.capture("candidate name", "feature_login")
+    TestLens.setup do
+      name = "feature_login"
+    end
 
-    result = TestLens.action("Sample.create_branch/1", Sample.create_branch("feature_login"))
+    TestLens.action "Sample.create_branch/1" do
+      result = Sample.create_branch(name)
+    end
 
-    TestLens.output("returns", result)
-    assert {:ok, %{created: true}} = result
+    TestLens.verify do
+      assert {:ok, %{created: true}} = result
+    end
   end
 
   test "create_branch rejects a protected name" do
-    TestLens.stage(:setup)
-    TestLens.capture("candidate name", "main")
+    TestLens.setup do
+      name = "main"
+    end
 
-    result = TestLens.action("Sample.create_branch/1", Sample.create_branch("main"))
+    TestLens.action "Sample.create_branch/1" do
+      result = Sample.create_branch(name)
+    end
 
-    TestLens.output("returns", result)
-    assert {:error, {:protected_branch, "main"}} = result
+    TestLens.verify do
+      assert {:error, {:protected_branch, "main"}} = result
+    end
   end
 end

@@ -240,6 +240,12 @@ defmodule TestLens.Viewer do
 
       .json-key { color: #79c0ff; } .json-str { color: #8dd1a6; } .json-num { color: #f0a45a; } .json-bool { color: #ff9a8d; }
 
+      /* ---------- copied phase source (what the test does) ---------- */
+      pre.phase-src { background: var(--bg-2); color: var(--text); border-left: 2px solid var(--line-2); }
+      .chan.in pre.phase-src { border-left-color: var(--in); }
+      .chan.act pre.phase-src { border-left-color: var(--act); }
+      .chan.out pre.phase-src { border-left-color: var(--out); }
+
       /* ---------- annotation readout ---------- */
       .anno { margin-bottom: 8px; display: flex; flex-direction: column; gap: 5px; }
       .anno-line {
@@ -545,6 +551,8 @@ defmodule TestLens.Viewer do
 
         text: v => `<pre>${esc(v)}</pre>`,
 
+        source: v => `<pre class="phase-src">${esc(v)}</pre>`,
+
         dolt_op: v => {
           const action = (v.action || "op").toLowerCase();
           const knownActions = ["commit", "branch", "merge", "diff"];
@@ -595,7 +603,9 @@ defmodule TestLens.Viewer do
       function itemHtml(it) {
         if (it._t === "db") return deltaHtml(it);
         const bare = it.kind === "http_request" || it.kind === "http_response";
-        return `<div class="item">${bare ? "" : `<div class="ilabel"><b>${esc(it.label)}</b></div>`}${annoHtml(it)}${renderValue(it)}</div>`;
+        const hasLabel = !bare && it.label != null && String(it.label).trim() !== "";
+        const label = hasLabel ? `<div class="ilabel"><b>${esc(it.label)}</b></div>` : "";
+        return `<div class="item">${label}${annoHtml(it)}${renderValue(it)}</div>`;
       }
       function emptyPrompt() {
         return `<div class="prompt"><div class="lens"></div><h2>Select a specimen</h2>` +
