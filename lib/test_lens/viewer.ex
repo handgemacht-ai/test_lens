@@ -240,6 +240,13 @@ defmodule TestLens.Viewer do
 
       .json-key { color: #79c0ff; } .json-str { color: #8dd1a6; } .json-num { color: #f0a45a; } .json-bool { color: #ff9a8d; }
 
+      /* ---------- inline SQL / Elixir token colors ---------- */
+      .tok-kw { color: var(--act); font-weight: 600; }
+      .tok-str { color: #8dd1a6; }
+      .tok-num { color: #f0a45a; }
+      .tok-com { color: var(--muted); font-style: italic; }
+      .tok-fn  { color: #79c0ff; }
+
       /* ---------- copied phase source (what the test does) ---------- */
       pre.phase-src { background: var(--bg-2); color: var(--text); border-left: 2px solid var(--line-2); }
       .chan.in pre.phase-src { border-left-color: var(--in); }
@@ -343,6 +350,8 @@ defmodule TestLens.Viewer do
       const escA = s => esc(s).replace(/"/g, '&quot;');
       const kind = s => s === "passed" ? "pass" : (s === "skipped" || s === "excluded") ? "skip" : "fail";
       const sev = c => { const k = kind(c.status); return k === "fail" ? 0 : k === "skip" ? 1 : 2; };
+      const caseId = c => c.module + "::" + c.name;
+      const caseKey = c => encodeURIComponent(caseId(c));
 
       /* ---------- readout ---------- */
       function renderReadout() {
@@ -477,6 +486,27 @@ defmodule TestLens.Viewer do
           .replace(/: (-?\d+\.?\d*)(,?)$/gm, ': <span class="json-num">$1</span>$2')
           .replace(/: (true|false|null)(,?)$/gm, ': <span class="json-bool">$1</span>$2');
       }
+      /* ---------- inline syntax highlighting (dependency-free, XSS-safe) ----------
+         esc() runs FIRST so &<> become entities; the only HTML we inject is our own
+         <span> tags. A single combined regex avoids nested-span corruption. */
+      function hl(s, kw) {
+        const RE = /((?:'(?:[^'\\]|\\.)*')|(?:"(?:[^"\\]|\\.)*"))|(--[^\n]*|#[^\n]*|\/\*[\s\S]*?\*\/)|(\b\d[\d_.]*\b)|([A-Za-z_][A-Za-z0-9_]*[!?]?)/g;
+        const E = esc(s);
+        return E.replace(RE, (m, str, com, num, word, off) => {
+          if (str) return `<span class="tok-str">${m}</span>`;
+          if (com) return `<span class="tok-com">${m}</span>`;
+          if (num) return `<span class="tok-num">${m}</span>`;
+          if (word) {
+            if (kw.has(word.toUpperCase())) return `<span class="tok-kw">${m}</span>`;
+            if (E[off + m.length] === "(") return `<span class="tok-fn">${m}</span>`;
+          }
+          return m;
+        });
+      }
+      const SQL_KW = new Set("SELECT INSERT INTO VALUES UPDATE SET DELETE FROM WHERE AND OR NOT NULL JOIN LEFT RIGHT INNER OUTER FULL CROSS ON AS ORDER GROUP BY HAVING LIMIT OFFSET RETURNING DISTINCT IN IS LIKE ILIKE BETWEEN CREATE TABLE PRIMARY KEY FOREIGN REFERENCES INDEX UNIQUE DROP ALTER ADD COLUMN COMMIT ROLLBACK BEGIN TRANSACTION SAVEPOINT CASE WHEN THEN ELSE END UNION ALL EXISTS ASC DESC USING DEFAULT CONSTRAINT CHECK INT INTEGER VARCHAR TEXT BOOLEAN TIMESTAMP".split(" "));
+      const EX_KW = new Set("DEF DEFP DEFMODULE DEFMACRO DEFMACROP DEFPROTOCOL DEFIMPL DEFSTRUCT DEFEXCEPTION DEFGUARD DEFGUARDP DO END FN IF UNLESS ELSE COND CASE WHEN WITH FOR TRY CATCH RESCUE AFTER RAISE THROW RECEIVE AND OR NOT IN NIL TRUE FALSE IMPORT ALIAS REQUIRE USE QUOTE UNQUOTE".split(" "));
+      function sqlHtml(s){ return hl(s, SQL_KW); }
+      function elixirHtml(s){ return hl(s, EX_KW); }
       /* ---------- annotation: resolve + highlight ---------- */
       const PATH_MISS = Symbol("miss");
       function resolvePath(value, path) {
@@ -551,7 +581,7 @@ defmodule TestLens.Viewer do
 
         text: v => `<pre>${esc(v)}</pre>`,
 
-        source: v => `<pre class="phase-src">${esc(v)}</pre>`,
+        source: v => `<pre class="phase-src hl elixir">${elixirHtml(v)}</pre>`,
 
         dolt_op: v => {
           const action = (v.action || "op").toLowerCase();
@@ -587,7 +617,7 @@ defmodule TestLens.Viewer do
         const op = (ev.op || "").toUpperCase();
         const map = op.startsWith("INSERT") ? ["ins", "&#43;"] : op.startsWith("DELETE") ? ["del", "&#8722;"] : op.startsWith("UPDATE") ? ["upd", "~"] : ["upd", "&middot;"];
         return `<div class="delta ${map[0]}"><div class="delta-h"><span class="sign">${map[1]}</span><span class="op">${esc(ev.op)}</span><span class="src">${esc(ev.source || "")}</span></div>` +
-          `<pre>${esc(ev.sql)}</pre>` +
+          `<pre class="hl sql">${sqlHtml(ev.sql)}</pre>` +
           (ev.params && ev.params.length ? `<div class="ilabel">params</div><pre>${jsonHtml(ev.params)}</pre>` : "") + "</div>";
       }
       function buildStages(c) {
@@ -644,6 +674,8 @@ defmodule TestLens.Viewer do
         renderDetail();
         // refresh sel highlight in the visible window
         paint();
+        const c = CASES[id];
+        if (c) history.replaceState(null, "", "?test=" + caseKey(c));
       }
 
       /* ---------- interactions ---------- */
@@ -671,20 +703,29 @@ defmodule TestLens.Viewer do
         pos = e.key === "ArrowDown" ? Math.min(testRows.length - 1, pos + 1) : Math.max(0, pos - 1);
         if (pos < 0) pos = 0;
         const idx = testRows[pos];
-        selectedId = rows[idx].id;
         const top = idx * ROW_H;
         if (top < scroller.scrollTop) scroller.scrollTop = top;
         else if (top + ROW_H > scroller.scrollTop + scroller.clientHeight) scroller.scrollTop = top + ROW_H - scroller.clientHeight;
-        renderDetail(); paint();
+        select(rows[idx].id);
       });
 
       /* ---------- boot ---------- */
       renderReadout();
       renderControls();
       rebuild(true);
-      const first = rows.find(r => r.type === "test");
-      if (first && window.innerWidth > 880) { selectedId = first.id; renderDetail(); paint(); }
-      else renderDetail();
+      const wantTest = new URLSearchParams(location.search).get("test");
+      const target = wantTest ? CASES.find(c => caseId(c) === wantTest) : null;
+      if (target) {
+        collapsed.delete(target.module);
+        rebuild(true);
+        select(target._id);
+        const idx = rows.findIndex(r => r.type === "test" && r.id === target._id);
+        if (idx >= 0) { scroller.scrollTop = Math.max(0, idx * ROW_H - scroller.clientHeight / 2); paint(); }
+      } else {
+        const first = rows.find(r => r.type === "test");
+        if (first && window.innerWidth > 880) select(first.id);
+        else renderDetail();
+      }
       </script>
     </body>
     </html>
