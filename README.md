@@ -28,10 +28,11 @@ end
 
 ## Quick start
 
-**1. Wire it up once** in `test/test_helper.exs`:
+**1. Wire it up once** in `test/test_helper.exs` — leave the output dir to the
+runner (don't hardcode it), so `mix test_lens.run --dir X` can drive it:
 
 ```elixir
-TestLens.start(project: "my_app", dir: "test_lens_out")
+TestLens.start(project: "my_app")
 ExUnit.start(formatters: [ExUnit.CLIFormatter, TestLens.Formatter])
 ```
 

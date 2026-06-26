@@ -10,8 +10,13 @@ defmodule TestLens do
 
   ## Wiring (in `test/test_helper.exs`)
 
-      TestLens.start(project: "havi", dir: "test_lens_out")
+      TestLens.start(project: "havi")
       ExUnit.start(formatters: [ExUnit.CLIFormatter, TestLens.Formatter])
+
+  Leave the output dir to the runner. `mix test_lens.run --dir X` exports
+  `TEST_LENS_DIR` and that wins, so the cases and the viewer land together at
+  `X` from one command — no manual relocation. A bare `mix test` (no env) falls
+  back to a `dir:` you pass here, else `"test_lens_out"`.
 
   ## Using it in a test
 
@@ -41,9 +46,47 @@ defmodule TestLens do
 
   alias TestLens.Recorder
 
-  @doc "Start the capture recorder. Call once from test_helper.exs before ExUnit.start/1."
+  @doc """
+  Start the capture recorder. Call once from test_helper.exs before
+  `ExUnit.start/1`.
+
+  Resolves the output dir via `resolve_dir/1` and publishes the chosen dir on
+  `Application.put_env(:test_lens, :dir, dir)` so any tool can discover where
+  this run is recording, then hands the resolved dir to the recorder.
+  """
   def start(opts \\ []) do
-    Recorder.start_link(opts)
+    dir = resolve_dir(opts)
+    Application.put_env(:test_lens, :dir, dir)
+    Recorder.start_link(Keyword.put(opts, :dir, dir))
+  end
+
+  @doc """
+  The recording dir for this run, by precedence — highest first:
+
+    1. `TEST_LENS_DIR` (env) — exported by `mix test_lens.run --dir X`. This wins
+       over everything, *including a hardcoded* `dir:` here, so the run task's
+       `--dir` reliably drives both where cases are written and where the viewer
+       is built. A blank value is treated as unset.
+    2. an explicit `dir:` opt — for a bare `mix test` with no env set.
+    3. `"test_lens_out"` — the default.
+
+  Only `TestLens.start/1` consults the env; `TestLens.Recorder` honors exactly
+  the dir it is handed, so embedders that drive the recorder directly are never
+  surprised by an inherited env var.
+  """
+  def resolve_dir(opts \\ []) do
+    case env_dir() do
+      nil -> opts[:dir] || "test_lens_out"
+      dir -> dir
+    end
+  end
+
+  defp env_dir do
+    case System.get_env("TEST_LENS_DIR") do
+      nil -> nil
+      "" -> nil
+      dir -> dir
+    end
   end
 
   @doc "Begin capturing for the current test. Driven by `use TestLens.Case`."
