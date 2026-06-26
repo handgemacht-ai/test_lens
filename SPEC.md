@@ -8,9 +8,36 @@ not be renamed or removed without a version bump.
 
 ## 1. Directory layout
 
-A single output root (the `dir:` passed to `TestLens.start/1`, default
-`test_lens_out`) holds many runs, each in its own directory. A run never
-overwrites a previous one.
+A single output root holds many runs, each in its own directory. A run never
+overwrites a previous one. The output root is resolved once, in
+`TestLens.start/1`, by this precedence — highest first:
+
+1. **`TEST_LENS_DIR`** (env). `mix test_lens.run --dir X` exports it (absolute),
+   and it wins over everything — *including a hardcoded* `dir:` in
+   `test_helper.exs` — so the run task's `--dir` reliably drives **both** where
+   cases are written and where the viewer is built, from one command, with no
+   manual relocation. A blank value is treated as unset.
+2. an explicit **`dir:`** opt to `TestLens.start/1` — for a bare `mix test`.
+3. **`"test_lens_out"`** — the default.
+
+`TestLens.start/1` publishes the resolved dir on
+`Application.put_env(:test_lens, :dir, dir)` so any tool can discover where the
+active run is recording. Only `TestLens.start/1` consults the env;
+`TestLens.Recorder` honors exactly the dir it is handed, so an embedder driving
+the recorder directly is never surprised by an inherited env var.
+
+### Recommended `test_helper.exs`
+
+Leave the dir to the runner — do not hardcode it:
+
+```elixir
+TestLens.start(project: "my_app")
+ExUnit.start(formatters: [ExUnit.CLIFormatter, TestLens.Formatter])
+```
+
+Then `mix test_lens.run --dir X` records into `X` and a bare `mix test` records
+into `test_lens_out`. Passing `dir:` still works (backward compatible): it sets
+the bare-`mix test` location, but `mix test_lens.run --dir` still overrides it.
 
 ```
 <dir>/
@@ -134,11 +161,15 @@ preferring the `runs/latest` pointer and falling back to newest mtime.
 mix test_lens.run [--dir <out>] [extra `mix test` args...]
 ```
 
-Runs the ExUnit suite (your `test/test_helper.exs` wiring — `TestLens.start/1` +
-`TestLens.Formatter`), then builds the viewer for the run that was produced and
-prints the `index.html` and `meta.json` paths. `--dir` defaults to
-`test_lens_out` and must match the `dir:` given to `TestLens.start/1`; all other
-arguments forward to `mix test`.
+Exports `TEST_LENS_DIR=<abs out>`, then runs the ExUnit suite in-process (your
+`test/test_helper.exs` wiring — `TestLens.start/1` + `TestLens.Formatter`), so
+**this run's cases are recorded under `<out>`** regardless of any `dir:` in
+`test_helper.exs` (see §1 precedence). It then builds the viewer for the run that
+was produced and prints the `index.html` and `meta.json` paths. `--dir` defaults
+to `test_lens_out`; all other arguments forward to `mix test`. A scheduler can
+therefore point one command at a shared store and just work:
+
+    mix test_lens.run --dir <WORKSPACE_ROOT>/.runtime/test-lens/<rig>/<worktree>
 ```
 
 ## 8. Run-vs-run diff command

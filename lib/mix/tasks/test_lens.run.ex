@@ -9,12 +9,16 @@ defmodule Mix.Tasks.TestLens.Run do
       mix test_lens.run --dir my_out     # use a non-default output root
       mix test_lens.run test/foo_test.exs --max-failures 1  # extra args pass through
 
-  It invokes `mix test` (so your `test/test_helper.exs` wiring — `TestLens.start/1`
-  plus the `TestLens.Formatter` — drives capture as usual), then resolves the
-  newest run under `<dir>/runs` and writes its `index.html`, printing the path.
+  It exports `TEST_LENS_DIR=<abs dir>` and then invokes `mix test` in-process, so
+  your `test/test_helper.exs` wiring (`TestLens.start/1` + `TestLens.Formatter`)
+  records *this run's* cases under `<dir>` — not wherever `test_helper.exs` would
+  otherwise default. It then resolves the newest run under `<dir>/runs` and
+  writes its `index.html`, printing the path.
 
-  `--dir` must match the `dir:` you pass to `TestLens.start/1` (default
-  `test_lens_out`). All other arguments are forwarded to `mix test`.
+  Because the env wins over a hardcoded `dir:` in `test_helper.exs`, `--dir`
+  reliably drives **both** where cases are written and where the viewer is built,
+  in one invocation, with no manual relocation. `--dir` defaults to
+  `test_lens_out`; all other arguments are forwarded to `mix test`.
   """
 
   use Mix.Task
@@ -24,7 +28,8 @@ defmodule Mix.Tasks.TestLens.Run do
   @impl Mix.Task
   def run(argv) do
     {opts, _rest, _invalid} = OptionParser.parse(argv, switches: @switches)
-    dir = opts[:dir] || "test_lens_out"
+    dir = Path.expand(opts[:dir] || "test_lens_out")
+    System.put_env("TEST_LENS_DIR", dir)
     forwarded = drop_dir(argv)
 
     Mix.Task.run("test", forwarded)
