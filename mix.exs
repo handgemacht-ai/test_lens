@@ -19,6 +19,11 @@ defmodule TestLens.MixProject do
     ]
   end
 
+  # `mix test_lens.run` shells out to `mix test`, so it must run in the test env.
+  def cli do
+    [preferred_envs: ["test_lens.run": :test]]
+  end
+
   defp package do
     [
       licenses: ["MIT"],

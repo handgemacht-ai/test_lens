@@ -12,15 +12,30 @@ defmodule TestLens.Viewer do
       TestLens.Viewer.build(dir: "test_lens_out")
   """
 
-  @doc "Read `<dir>/cases/*.json` and write `<dir>/index.html`. Returns {:ok, path, count}."
+  @doc """
+  Build a single run's `index.html` from its `cases/*.json` and return
+  `{:ok, out_path, case_count}`.
+
+  `:dir` is resolved as follows (see `SPEC.md`):
+
+    * a **run directory** (one that directly contains `cases/`) is built as-is,
+      writing `<dir>/index.html`;
+    * a **workspace root** (one that contains a `runs/` directory) builds its
+      latest run — a legacy flat `<dir>/cases/` is still merged in for backward
+      compatibility — writing `<dir>/index.html`;
+    * pass `run: "<run_id>"` to build a specific run under a workspace root.
+
+      TestLens.Viewer.build(dir: "test_lens_out")
+      TestLens.Viewer.build(dir: "test_lens_out", run: "20260626T141530Z-7")
+      TestLens.Viewer.build(dir: "test_lens_out/runs/20260626T141530Z-7")
+  """
   def build(opts \\ []) do
     dir = opts[:dir] || "test_lens_out"
-    out = opts[:out] || Path.join(dir, "index.html")
+    out = opts[:out] || default_out(dir, opts)
 
     cases =
       dir
-      |> Path.join("cases/*.json")
-      |> Path.wildcard()
+      |> case_files(opts)
       |> Enum.sort()
       |> Enum.map(fn path -> path |> File.read!() |> Jason.decode!() end)
 
@@ -31,8 +46,68 @@ defmodule TestLens.Viewer do
       |> String.replace("__CASES_JSON__", json)
       |> String.replace("__COUNT__", Integer.to_string(length(cases)))
 
+    File.mkdir_p!(Path.dirname(out))
     File.write!(out, html)
     {:ok, out, length(cases)}
+  end
+
+  @doc """
+  Directory of the most recent run under `dir` (`<dir>/runs/<run_id>`), or `nil`
+  when there are none. Prefers the `<dir>/runs/latest` pointer, falling back to
+  the newest run directory by mtime. Useful for tools that discover runs.
+  """
+  def latest_run(dir \\ "test_lens_out") do
+    runs = Path.join(dir, "runs")
+    pointer = Path.join(runs, "latest")
+
+    from_pointer =
+      if File.regular?(pointer) do
+        candidate = Path.join(runs, pointer |> File.read!() |> String.trim())
+        if File.dir?(candidate), do: candidate
+      end
+
+    from_pointer || newest_run(runs)
+  end
+
+  defp newest_run(runs) do
+    runs
+    |> Path.join("*")
+    |> Path.wildcard()
+    |> Enum.filter(&File.dir?/1)
+    |> Enum.sort_by(&run_mtime/1, :desc)
+    |> List.first()
+  end
+
+  defp run_mtime(dir) do
+    case File.stat(dir) do
+      {:ok, %{mtime: mtime}} -> mtime
+      _ -> 0
+    end
+  end
+
+  defp case_files(dir, opts) do
+    cond do
+      run = opts[:run] ->
+        glob_cases(Path.join([dir, "runs", run]))
+
+      File.dir?(Path.join(dir, "runs")) ->
+        latest = latest_run(dir)
+        from_run = if latest, do: glob_cases(latest), else: []
+        Enum.uniq(from_run ++ glob_cases(dir))
+
+      true ->
+        glob_cases(dir)
+    end
+  end
+
+  defp glob_cases(run_or_dir), do: run_or_dir |> Path.join("cases/*.json") |> Path.wildcard()
+
+  defp default_out(dir, opts) do
+    if run = opts[:run] do
+      Path.join([dir, "runs", run, "index.html"])
+    else
+      Path.join(dir, "index.html")
+    end
   end
 
   defp template do
