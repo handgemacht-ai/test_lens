@@ -1,7 +1,8 @@
 defmodule TestLens.Formatter do
   @moduledoc """
   ExUnit formatter that flushes each finished test to a JSON case, tagging it
-  with the real pass/fail status ExUnit assigns. Add it alongside the default:
+  with the real pass/fail status ExUnit assigns. On `:suite_finished` it asks
+  the recorder to flush the run-level `meta.json`. Add it alongside the default:
 
       ExUnit.start(formatters: [ExUnit.CLIFormatter, TestLens.Formatter])
   """
@@ -15,6 +16,16 @@ defmodule TestLens.Formatter do
   @impl true
   def handle_cast({:test_finished, test}, state) do
     Recorder.finish(test.module, test.name, status(test.state), test.time, meta(test))
+    {:noreply, state}
+  end
+
+  def handle_cast({:suite_finished, _times}, state) do
+    Recorder.finalize()
+    {:noreply, state}
+  end
+
+  def handle_cast({:suite_finished, _run_us, _load_us}, state) do
+    Recorder.finalize()
     {:noreply, state}
   end
 

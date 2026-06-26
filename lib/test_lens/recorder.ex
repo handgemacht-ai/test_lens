@@ -6,15 +6,24 @@ defmodule TestLens.Recorder do
   Captures arrive from the test process (and from telemetry handlers running in
   that process); the flush is triggered from the ExUnit formatter process. A
   pid index bridges the two so callers never thread an id around by hand.
+
+  Each run is given a stable identity once, in `init/1`: a `run_id`, an ISO-8601
+  `run_at`, and a best-effort git context. Cases are written under
+  `<dir>/runs/<run_id>/cases/`, and a run-level `meta.json` is flushed when the
+  suite finishes (or, as a backstop, on process terminate). A fresh run never
+  overwrites a previous one — each lands in its own `run_id` directory. See
+  `SPEC.md` for the on-disk contract.
   """
   use GenServer
 
-  alias TestLens.JSON
+  alias TestLens.{Git, JSON}
 
   @name __MODULE__
 
   def start_link(opts) do
-    GenServer.start_link(@name, opts, name: @name)
+    {name, opts} = Keyword.pop(opts, :name, @name)
+    gen_opts = if name, do: [name: name], else: []
+    GenServer.start_link(__MODULE__, opts, gen_opts)
   end
 
   def begin(meta), do: cast({:begin, meta})
@@ -38,6 +47,15 @@ defmodule TestLens.Recorder do
       else: :ignored
   end
 
+  @doc """
+  Flush the run-level `meta.json`. Called by `TestLens.Formatter` on
+  `:suite_finished`; safe to call more than once.
+  """
+  def finalize, do: if(alive?(), do: GenServer.call(@name, :finalize), else: :ignored)
+
+  @doc "Identity of the active run: `run_id`, `run_at`, `git`, `run_dir`, `dir`."
+  def run_info, do: if(alive?(), do: GenServer.call(@name, :run_info), else: :ignored)
+
   defp cast(msg), do: if(alive?(), do: GenServer.cast(@name, msg), else: :ok)
   defp alive?, do: is_pid(Process.whereis(@name))
 
@@ -47,10 +65,29 @@ defmodule TestLens.Recorder do
   def init(opts) do
     project = opts[:project] || "unknown"
     dir = opts[:dir] || "test_lens_out"
-    cases_dir = Path.join(dir, "cases")
-    File.mkdir_p!(cases_dir)
+    {run_id, run_at} = new_run_id()
+    git = opts[:git] || Git.context(opts[:git_dir] || File.cwd!())
 
-    {:ok, %{project: project, dir: dir, cases_dir: cases_dir, by_key: %{}, pids: %{}, seq: 0}}
+    run_dir = Path.join([dir, "runs", run_id])
+    cases_dir = Path.join(run_dir, "cases")
+    File.mkdir_p!(cases_dir)
+    write_latest_pointer(dir, run_id)
+
+    {:ok,
+     %{
+       project: project,
+       dir: dir,
+       run_dir: run_dir,
+       cases_dir: cases_dir,
+       run_id: run_id,
+       run_at: run_at,
+       git: git,
+       by_key: %{},
+       pids: %{},
+       seq: 0,
+       case_count: 0,
+       status_counts: %{}
+     }}
   end
 
   @impl true
@@ -119,7 +156,32 @@ defmodule TestLens.Recorder do
 
     path = write_case(state, acc, status, duration_us)
     pids = state.pids |> Enum.reject(fn {_pid, k} -> k == key end) |> Map.new()
-    {:reply, {:ok, path}, %{state | by_key: Map.delete(state.by_key, key), pids: pids}}
+
+    state = %{
+      state
+      | by_key: Map.delete(state.by_key, key),
+        pids: pids,
+        case_count: state.case_count + 1,
+        status_counts: Map.update(state.status_counts, to_string(status), 1, &(&1 + 1))
+    }
+
+    {:reply, {:ok, path}, state}
+  end
+
+  def handle_call(:finalize, _from, state) do
+    write_meta(state)
+    {:reply, :ok, state}
+  end
+
+  def handle_call(:run_info, _from, state) do
+    info = Map.take(state, [:run_id, :run_at, :git, :run_dir, :dir])
+    {:reply, info, state}
+  end
+
+  @impl true
+  def terminate(_reason, state) do
+    write_meta(state)
+    :ok
   end
 
   # A test that never called begin/1 (no `use TestLens.Case`) still gets a
@@ -140,6 +202,9 @@ defmodule TestLens.Recorder do
   defp write_case(state, acc, status, duration_us) do
     payload = %{
       schema: "test_lens/v1.1",
+      run_id: state.run_id,
+      run_at: state.run_at,
+      git: state.git,
       project: state.project,
       module: acc.module,
       name: acc.name,
@@ -156,6 +221,43 @@ defmodule TestLens.Recorder do
     path = Path.join(state.cases_dir, filename)
     File.write!(path, Jason.encode!(payload, pretty: true))
     path
+  end
+
+  defp write_meta(state) do
+    meta = %{
+      schema: "test_lens_run/v1",
+      run_id: state.run_id,
+      run_at: state.run_at,
+      project: state.project,
+      git: state.git,
+      case_count: state.case_count,
+      status_counts: state.status_counts
+    }
+
+    File.mkdir_p!(state.run_dir)
+    File.write!(Path.join(state.run_dir, "meta.json"), Jason.encode!(meta, pretty: true))
+  rescue
+    _ -> :ok
+  end
+
+  defp new_run_id do
+    now = DateTime.utc_now()
+    run_at = DateTime.to_iso8601(now)
+
+    stamp =
+      now
+      |> DateTime.truncate(:second)
+      |> DateTime.to_iso8601()
+      |> String.replace(["-", ":"], "")
+
+    uniq = System.unique_integer([:positive, :monotonic])
+    {stamp <> "-" <> Integer.to_string(uniq), run_at}
+  end
+
+  defp write_latest_pointer(dir, run_id) do
+    File.write(Path.join([dir, "runs", "latest"]), run_id)
+  rescue
+    _ -> :ok
   end
 
   defp update_acc(state, pid, fun) do
