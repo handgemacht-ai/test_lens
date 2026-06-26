@@ -140,3 +140,34 @@ prints the `index.html` and `meta.json` paths. `--dir` defaults to
 `test_lens_out` and must match the `dir:` given to `TestLens.start/1`; all other
 arguments forward to `mix test`.
 ```
+
+## 8. Run-vs-run diff command
+
+```
+mix test_lens.diff --base <run_dir> --head <run_dir> [--out <file.html>]
+```
+
+Compares two runs and writes a self-contained HTML diff plus a machine-readable
+`diff.json`. Each `<run_dir>` is a `runs/<run_id>/` directory (the one holding
+`meta.json` + `cases/`). The HTML is written to `--out` (default
+`<head_run_dir>/diff.html`); a `diff.json` summary is always written next to it.
+The absolute HTML path is printed on stdout and the command exits 0 on success.
+
+Tests are matched across runs by identity (`module::name`, §5) and grouped:
+
+| group | meaning |
+|---|---|
+| `added` | identity present in HEAD, absent from BASE |
+| `removed` | identity present in BASE, absent from HEAD |
+| `flipped` | present in both, **status changed** (e.g. `passed → failed`) |
+| `changed` | present in both, **same status**, but the captured `captures` + `db_events` differ |
+| `unchanged` | present in both, same status, same captured content (count only) |
+
+A status flip takes precedence over a content change: a test whose status moved
+is reported as a flip even if its captures also moved. Comparison ignores the
+per-run `seq` ordering key and `duration_us` (both move every run); only the
+captured input/action/result content is compared. Missing `meta.json` (rebuilt
+from the cases), empty runs, identical runs, and a base with no `merge_base` are
+all handled gracefully.
+
+See `docs/diff-format.md` for the full `diff.json` schema (`test_lens_diff/v1`).
