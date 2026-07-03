@@ -52,12 +52,15 @@ defmodule TestLens do
 
   Resolves the output dir via `resolve_dir/1` and publishes the chosen dir on
   `Application.put_env(:test_lens, :dir, dir)` so any tool can discover where
-  this run is recording, then hands the resolved dir to the recorder.
+  this run is recording, then starts the recorder under a supervisor so an
+  unexpected crash mid-suite restarts it instead of silently losing the rest of
+  the run. Returns the supervisor's `{:ok, pid}`.
   """
   def start(opts \\ []) do
     dir = resolve_dir(opts)
     Application.put_env(:test_lens, :dir, dir)
-    Recorder.start_link(Keyword.put(opts, :dir, dir))
+    child = {Recorder, Keyword.put(opts, :dir, dir)}
+    Supervisor.start_link([child], strategy: :one_for_one, name: TestLens.Supervisor)
   end
 
   @doc """

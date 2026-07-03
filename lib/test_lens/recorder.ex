@@ -8,13 +8,23 @@ defmodule TestLens.Recorder do
   pid index bridges the two so callers never thread an id around by hand.
 
   Each run is given a stable identity once, in `init/1`: a `run_id`, an ISO-8601
-  `run_at`, and a best-effort git context. Cases are written under
-  `<dir>/runs/<run_id>/cases/`, and a run-level `meta.json` is flushed when the
-  suite finishes (or, as a backstop, on process terminate). A fresh run never
-  overwrites a previous one — each lands in its own `run_id` directory. See
-  `SPEC.md` for the on-disk contract.
+  `run_at`, and a best-effort git context. The run directory and the
+  `runs/latest` pointer are **created lazily**, only once a real case is written
+  — a recorder that boots but records nothing leaves no trace and never repoints
+  `latest` at an empty run. Cases land under `<dir>/runs/<run_id>/cases/`, and a
+  run-level `meta.json` is flushed when the suite finishes (or, as a backstop, on
+  process terminate) but only for a run that actually recorded something. A fresh
+  run never overwrites a previous one — each lands in its own `run_id` directory.
+  See `SPEC.md` for the on-disk contract.
+
+  The recorder is defensive on purpose: value sanitization happens on the caller
+  (the test pid) before the cast, and every message handler is wrapped so a
+  poison value or a failing `File.write!` drops that one capture/case (logged
+  once) rather than taking the whole run's recording down with it. Run it under a
+  supervisor (see `TestLens.start/1`) so even an unexpected crash restarts it.
   """
   use GenServer
+  require Logger
 
   alias TestLens.{Git, JSON}
 
@@ -29,13 +39,15 @@ defmodule TestLens.Recorder do
   def begin(meta), do: cast({:begin, meta})
   def put_stage(pid, stage), do: cast({:stage, pid, stage})
 
+  # Sanitize on the caller (the test pid) *before* the cast, so the recorder
+  # never runs arbitrary-value coercion inside its single message loop.
   def add_capture(pid, label, kind, value, stage, paths \\ []),
-    do: cast({:capture, pid, label, kind, value, stage, paths})
+    do: cast({:capture, pid, label, kind, JSON.sanitize(value), stage, sanitize_paths(paths)})
 
   def add_db_event(pid, event), do: cast({:db_event, pid, event})
 
   @doc """
-  Flush a finished test to disk. Returns {:ok, path} | :ignored.
+  Flush a finished test to disk. Returns {:ok, path} | {:error, reason} | :ignored.
 
   `meta` (`:file`, `:line`, `:tags`) lets a test that never called `begin/1`
   still be written as a status-only case, so a suite with no shared case module
@@ -49,7 +61,8 @@ defmodule TestLens.Recorder do
 
   @doc """
   Flush the run-level `meta.json`. Called by `TestLens.Formatter` on
-  `:suite_finished`; safe to call more than once.
+  `:suite_finished`; safe to call more than once. A no-op for a run that never
+  recorded a case.
   """
   def finalize, do: if(alive?(), do: GenServer.call(@name, :finalize), else: :ignored)
 
@@ -70,9 +83,10 @@ defmodule TestLens.Recorder do
 
     run_dir = Path.join([dir, "runs", run_id])
     cases_dir = Path.join(run_dir, "cases")
-    File.mkdir_p!(cases_dir)
-    write_latest_pointer(dir, run_id)
 
+    # No filesystem side effects here — the run dir and `runs/latest` pointer are
+    # materialized lazily on the first successful case write (see `handle_call`
+    # for `:finish`). Booting without recording must leave nothing behind.
     {:ok,
      %{
        project: project,
@@ -86,7 +100,9 @@ defmodule TestLens.Recorder do
        pids: %{},
        seq: 0,
        case_count: 0,
-       status_counts: %{}
+       status_counts: %{},
+       dropped_off_pid: 0,
+       materialized: false
      }}
   end
 
@@ -107,10 +123,18 @@ defmodule TestLens.Recorder do
 
     {:noreply,
      %{state | by_key: Map.put(state.by_key, key, acc), pids: Map.put(state.pids, meta.pid, key)}}
+  rescue
+    error ->
+      log_once(:begin, error, __STACKTRACE__)
+      {:noreply, state}
   end
 
   def handle_cast({:stage, pid, stage}, state) do
     {:noreply, update_acc(state, pid, &%{&1 | stage: stage})}
+  rescue
+    error ->
+      log_once(:stage, error, __STACKTRACE__)
+      {:noreply, state}
   end
 
   def handle_cast({:capture, pid, label, kind, value, stage_override, paths}, state) do
@@ -118,19 +142,24 @@ defmodule TestLens.Recorder do
 
     state =
       update_acc(state, pid, fn acc ->
+        # `value`/`paths` are already sanitized on the caller side (add_capture).
         entry = %{
           stage: (stage_override && to_string(stage_override)) || acc.stage,
           label: label,
           kind: kind,
-          value: JSON.sanitize(value),
+          value: value,
           seq: seq,
-          paths: sanitize_paths(paths)
+          paths: paths
         }
 
         %{acc | captures: [entry | acc.captures]}
       end)
 
     {:noreply, state}
+  rescue
+    error ->
+      log_once(:capture, error, __STACKTRACE__)
+      {:noreply, state}
   end
 
   def handle_cast({:db_event, pid, event}, state) do
@@ -142,6 +171,10 @@ defmodule TestLens.Recorder do
       end)
 
     {:noreply, state}
+  rescue
+    error ->
+      log_once(:db_event, error, __STACKTRACE__)
+      {:noreply, state}
   end
 
   @impl true
@@ -154,18 +187,29 @@ defmodule TestLens.Recorder do
         :error -> blank_acc(module, name, meta)
       end
 
-    path = write_case(state, acc, status, duration_us)
-    pids = state.pids |> Enum.reject(fn {_pid, k} -> k == key end) |> Map.new()
+    try do
+      File.mkdir_p!(state.cases_dir)
+      path = write_case(state, acc, status, duration_us)
 
-    state = %{
-      state
-      | by_key: Map.delete(state.by_key, key),
-        pids: pids,
-        case_count: state.case_count + 1,
-        status_counts: Map.update(state.status_counts, to_string(status), 1, &(&1 + 1))
-    }
+      state =
+        state
+        |> mark_materialized()
+        |> forget_key(key)
 
-    {:reply, {:ok, path}, state}
+      state = %{
+        state
+        | case_count: state.case_count + 1,
+          status_counts: Map.update(state.status_counts, to_string(status), 1, &(&1 + 1))
+      }
+
+      {:reply, {:ok, path}, state}
+    rescue
+      error ->
+        # Drop this one case (log once) but keep the recorder — and the rest of
+        # the run — alive. Forget the key so a failed test never leaks state.
+        log_once(:write_case, error, __STACKTRACE__)
+        {:reply, {:error, :write_failed}, forget_key(state, key)}
+    end
   end
 
   def handle_call(:finalize, _from, state) do
@@ -223,6 +267,10 @@ defmodule TestLens.Recorder do
     path
   end
 
+  # Only ever writes a meta.json for a run that materialized (recorded ≥1 case),
+  # so a boot-without-recording never leaves a phantom run behind.
+  defp write_meta(%{materialized: false}), do: :ok
+
   defp write_meta(state) do
     meta = %{
       schema: "test_lens_run/v1",
@@ -231,7 +279,8 @@ defmodule TestLens.Recorder do
       project: state.project,
       git: state.git,
       case_count: state.case_count,
-      status_counts: state.status_counts
+      status_counts: state.status_counts,
+      dropped_off_pid: state.dropped_off_pid
     }
 
     File.mkdir_p!(state.run_dir)
@@ -254,10 +303,27 @@ defmodule TestLens.Recorder do
     {stamp <> "-" <> Integer.to_string(uniq), run_at}
   end
 
+  # The first real case both creates the run dir's pointer and claims `latest`.
+  # Idempotent: only the first successful case write flips the flag.
+  defp mark_materialized(%{materialized: true} = state), do: state
+
+  defp mark_materialized(state) do
+    write_latest_pointer(state.dir, state.run_id)
+    %{state | materialized: true}
+  end
+
   defp write_latest_pointer(dir, run_id) do
     File.write(Path.join([dir, "runs", "latest"]), run_id)
   rescue
     _ -> :ok
+  end
+
+  defp forget_key(state, key) do
+    %{
+      state
+      | by_key: Map.delete(state.by_key, key),
+        pids: state.pids |> Enum.reject(fn {_pid, k} -> k == key end) |> Map.new()
+    }
   end
 
   defp update_acc(state, pid, fun) do
@@ -265,11 +331,28 @@ defmodule TestLens.Recorder do
          acc when not is_nil(acc) <- state.by_key[key] do
       %{state | by_key: Map.put(state.by_key, key, fun.(acc))}
     else
-      _ -> state
+      # A cast from a pid we can't resolve to a test is dropped — but counted, so
+      # the loss is visible in meta.json instead of silently vanishing.
+      _ -> %{state | dropped_off_pid: state.dropped_off_pid + 1}
     end
   end
 
   defp next_seq(state), do: {state.seq, %{state | seq: state.seq + 1}}
+
+  # Log the first drop of each kind and stay quiet after, so a systematically
+  # bad value (e.g. an unwritable output dir) does not flood the run's output.
+  defp log_once(tag, error, stacktrace) do
+    unless Process.get({__MODULE__, :logged, tag}) do
+      Process.put({__MODULE__, :logged, tag}, true)
+
+      Logger.warning(
+        "TestLens.Recorder dropped a #{tag}; the run continues without it.\n" <>
+          Exception.format(:error, error, stacktrace)
+      )
+    end
+
+    :ok
+  end
 
   defp sanitize_paths(paths) when is_list(paths) do
     Enum.map(paths, fn path -> Enum.map(List.wrap(path), &path_key/1) end)
