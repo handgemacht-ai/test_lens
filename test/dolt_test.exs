@@ -4,8 +4,19 @@ defmodule TestLens.DoltTest do
 
   No live Dolt binary is required. All assertions run against the recorder
   and the viewer, using the same fixtures-from-recorder pattern as catalog_test.
+
+  This file also dogfoods TestLens on itself. Each test drives the recorder for a
+  *synthetic* case keyed to `self()`, and the synthetic `finish` forgets `self()`
+  — so the dogfood readouts below (the input op, the acted-on thing, the verified
+  outcome) are recorded onto *this* test's own case in the window before the
+  synthetic `Recorder.begin` steals the pid. `use TestLens.Case` registers that
+  real case; the `TestLens.action` block copies the recording step's source into
+  the ACTION channel. A `TestLens.verify` block would be dropped (the synthetic
+  `finish` already forgot the pid by then), so the verified outcome is recorded as
+  a `stage: "verify"` readout instead. See concerns in the handoff for detail.
   """
   use ExUnit.Case, async: false
+  use TestLens.Case
 
   alias TestLens.{Dolt, Recorder, ViewerCase}
 
@@ -14,29 +25,45 @@ defmodule TestLens.DoltTest do
   # ---------------------------------------------------------------------------
 
   test "Dolt.capture stores a dolt_op entry in captures" do
-    module = TestLens.DoltTest.CommitSynthetic
-    name = :"test dolt commit capture"
-
-    Recorder.begin(%{
-      module: module,
-      name: name,
-      pid: self(),
-      file: __ENV__.file,
-      line: __ENV__.line,
-      tags: []
-    })
-
-    Recorder.put_stage(self(), "action")
-
-    Dolt.capture(self(), %{
+    op = %{
       action: "commit",
       branch: "feature/add-index",
       commit_hash: "abc1234f",
       message: "Add index on annotations.org_id",
       result: :ok
-    })
+    }
 
-    assert {:ok, path} = Recorder.finish(module, name, "passed", 1_000)
+    module = TestLens.DoltTest.CommitSynthetic
+    name = :"test dolt commit capture"
+
+    TestLens.capture("dolt op fed to Dolt.capture/2", op,
+      kind: :dolt_op,
+      stage: "setup",
+      annotate: [["action"], ["branch"], ["commit_hash"]]
+    )
+
+    TestLens.capture(
+      "verified: the op lands as one dolt_op capture at the action stage, no db writes",
+      %{lands_in: "captures", kind: "dolt_op", stage: "action", captures: 1, db_events: 0},
+      stage: "verify",
+      annotate: [["kind"], ["captures"], ["db_events"]]
+    )
+
+    TestLens.action "record the op through the recorder and flush it to a case file" do
+      Recorder.begin(%{
+        module: module,
+        name: name,
+        pid: self(),
+        file: __ENV__.file,
+        line: __ENV__.line,
+        tags: []
+      })
+
+      Recorder.put_stage(self(), "action")
+      Dolt.capture(self(), op)
+
+      assert {:ok, path} = Recorder.finish(module, name, "passed", 1_000)
+    end
 
     case_data = path |> File.read!() |> Jason.decode!()
 
@@ -53,27 +80,47 @@ defmodule TestLens.DoltTest do
     assert cap["value"]["message"] == "Add index on annotations.org_id"
   end
 
-  test "Dolt.capture without a branch still stores dolt_op" do
+  test "Dolt.capture stores a dolt_op for a branch op with no commit hash or message" do
+    op = %{action: "branch", branch: "new-feature"}
+
     module = TestLens.DoltTest.BranchlessSynthetic
-    name = :"test dolt branch capture no branch"
+    name = :"test dolt branch capture minimal op"
 
-    Recorder.begin(%{
-      module: module,
-      name: name,
-      pid: self(),
-      file: __ENV__.file,
-      line: __ENV__.line,
-      tags: []
-    })
+    TestLens.capture("minimal dolt op: a branch creation, no commit hash or message", op,
+      kind: :dolt_op,
+      stage: "setup",
+      annotate: [["action"], ["branch"]]
+    )
 
-    Dolt.capture(self(), %{action: "branch", branch: "new-feature"})
+    TestLens.capture(
+      "verified: still stored as a dolt_op; commit_hash and message keys are simply absent",
+      %{kind: "dolt_op", action: "branch", has_commit_hash: false, has_message: false},
+      stage: "verify",
+      annotate: [["kind"], ["action"]]
+    )
 
-    assert {:ok, path} = Recorder.finish(module, name, "passed", 500)
+    TestLens.action "record the minimal op and flush it to a case file" do
+      Recorder.begin(%{
+        module: module,
+        name: name,
+        pid: self(),
+        file: __ENV__.file,
+        line: __ENV__.line,
+        tags: []
+      })
+
+      Dolt.capture(self(), op)
+
+      assert {:ok, path} = Recorder.finish(module, name, "passed", 500)
+    end
 
     case_data = path |> File.read!() |> Jason.decode!()
     [cap] = case_data["captures"]
     assert cap["kind"] == "dolt_op"
     assert cap["value"]["action"] == "branch"
+    # a minimal op stores exactly the keys it carried — nothing is defaulted in.
+    refute Map.has_key?(cap["value"], "commit_hash")
+    refute Map.has_key?(cap["value"], "message")
   end
 
   # ---------------------------------------------------------------------------
@@ -81,28 +128,52 @@ defmodule TestLens.DoltTest do
   # ---------------------------------------------------------------------------
 
   test "a case with only dolt_op captures has zero db_events" do
-    module = TestLens.DoltTest.DbZeroSynthetic
-    name = :"test dolt only no db writes"
+    merge_op = %{action: "merge", branch: "main", message: "Merge feature branch"}
 
-    Recorder.begin(%{
-      module: module,
-      name: name,
-      pid: self(),
-      file: __ENV__.file,
-      line: __ENV__.line,
-      tags: []
-    })
-
-    Dolt.capture(self(), %{action: "merge", branch: "main", message: "Merge feature branch"})
-
-    Dolt.capture(self(), %{
+    commit_op = %{
       action: "commit",
       branch: "main",
       commit_hash: "deadbeef",
       message: "Post-merge snapshot"
-    })
+    }
 
-    assert {:ok, path} = Recorder.finish(module, name, "passed", 800)
+    module = TestLens.DoltTest.DbZeroSynthetic
+    name = :"test dolt only no db writes"
+
+    TestLens.capture("first dolt op: a merge onto main", merge_op,
+      kind: :dolt_op,
+      stage: "setup",
+      annotate: [["action"], ["branch"]]
+    )
+
+    TestLens.capture("second dolt op: the post-merge commit", commit_op,
+      kind: :dolt_op,
+      stage: "setup",
+      annotate: [["action"], ["commit_hash"]]
+    )
+
+    TestLens.capture(
+      "verified: both ops land in captures as dolt_op; db_events stays empty",
+      %{captures: 2, all_kind: "dolt_op", db_events: 0},
+      stage: "verify",
+      annotate: [["captures"], ["db_events"]]
+    )
+
+    TestLens.action "record both dolt ops and flush the case" do
+      Recorder.begin(%{
+        module: module,
+        name: name,
+        pid: self(),
+        file: __ENV__.file,
+        line: __ENV__.line,
+        tags: []
+      })
+
+      Dolt.capture(self(), merge_op)
+      Dolt.capture(self(), commit_op)
+
+      assert {:ok, path} = Recorder.finish(module, name, "passed", 800)
+    end
 
     case_data = path |> File.read!() |> Jason.decode!()
 
@@ -112,32 +183,53 @@ defmodule TestLens.DoltTest do
   end
 
   # ---------------------------------------------------------------------------
-  # Viewer — HTML contains the action label; db_writes reads out 0
+  # Viewer — HTML embeds the payload; db_writes reads out 0
   # ---------------------------------------------------------------------------
 
   test "Viewer.build embeds the dolt_op capture payload the renderer draws from" do
-    module = TestLens.DoltTest.ViewerSynthetic
-    name = :"test dolt viewer html"
-
-    Recorder.begin(%{
-      module: module,
-      name: name,
-      pid: self(),
-      file: __ENV__.file,
-      line: __ENV__.line,
-      tags: []
-    })
-
-    Recorder.put_stage(self(), "action")
-
-    Dolt.capture(self(), %{
+    op = %{
       action: "commit",
       branch: "deploy/v2",
       commit_hash: "c0ffee99",
       message: "Release v2 schema"
-    })
+    }
 
-    assert {:ok, path} = Recorder.finish(module, name, "passed", 1_500)
+    module = TestLens.DoltTest.ViewerSynthetic
+    name = :"test dolt viewer html"
+
+    TestLens.capture("dolt op recorded, then built into the viewer", op,
+      kind: :dolt_op,
+      stage: "setup",
+      annotate: [["action"], ["branch"], ["commit_hash"]]
+    )
+
+    TestLens.capture(
+      "verified: the built HTML embeds this dolt_op payload verbatim for the JS renderer",
+      %{
+        embedded_kind: "dolt_op",
+        embedded_stage: "action",
+        embedded_commit_hash: "c0ffee99",
+        exact_bytes_present: [~s("kind":"dolt_op"), ~s("commit_hash":"c0ffee99")]
+      },
+      stage: "verify",
+      annotate: [["embedded_kind"], ["embedded_commit_hash"]]
+    )
+
+    TestLens.action "record the op, then build an isolated viewer over just this case" do
+      Recorder.begin(%{
+        module: module,
+        name: name,
+        pid: self(),
+        file: __ENV__.file,
+        line: __ENV__.line,
+        tags: []
+      })
+
+      Recorder.put_stage(self(), "action")
+      Dolt.capture(self(), op)
+
+      assert {:ok, path} = Recorder.finish(module, name, "passed", 1_500)
+    end
 
     # Build against an isolated copy of only this case, so the assertions below
     # cannot be satisfied by another test's data — and so they fail on the empty
@@ -162,30 +254,51 @@ defmodule TestLens.DoltTest do
     module = TestLens.DoltTest.SafetyRegressionSynthetic
     name = :"test render safety fixes"
 
-    Recorder.begin(%{
-      module: module,
-      name: name,
-      pid: self(),
-      file: __ENV__.file,
-      line: __ENV__.line,
-      tags: []
-    })
-
-    Recorder.put_stage(self(), "action")
-
-    # kind that collides with Object.prototype — must not crash, must fall back to JSON
-    Recorder.add_capture(
-      self(),
-      "<script>alert(1)</script>",
-      "constructor",
-      %{safe: true},
-      "action"
+    TestLens.capture(
+      "hostile capture: a prototype-colliding kind and a script-tag label",
+      %{kind: "constructor", label: "<script>alert(1)</script>", value: %{safe: true}},
+      stage: "setup",
+      annotate: [["kind"], ["label"]]
     )
 
-    # additional capture for verify stage
-    Recorder.add_capture(self(), "output", "text", "normal", "verify")
+    TestLens.capture(
+      "verified: stored via the generic JSON fallback (no crash), script tag neutralized to text",
+      %{
+        rendered_via: "generic JSON fallback",
+        stored_kind: "constructor",
+        stored_value: %{safe: true},
+        script_label_escaped: true
+      },
+      stage: "verify",
+      annotate: [["stored_kind"], ["script_label_escaped"]]
+    )
 
-    assert {:ok, path} = Recorder.finish(module, name, "passed", 100)
+    TestLens.action "record the hostile capture, then build an isolated viewer from it" do
+      Recorder.begin(%{
+        module: module,
+        name: name,
+        pid: self(),
+        file: __ENV__.file,
+        line: __ENV__.line,
+        tags: []
+      })
+
+      Recorder.put_stage(self(), "action")
+
+      # kind that collides with Object.prototype — must not crash, must fall back to JSON
+      Recorder.add_capture(
+        self(),
+        "<script>alert(1)</script>",
+        "constructor",
+        %{safe: true},
+        "action"
+      )
+
+      # additional capture for verify stage
+      Recorder.add_capture(self(), "output", "text", "normal", "verify")
+
+      assert {:ok, path} = Recorder.finish(module, name, "passed", 100)
+    end
 
     html = ViewerCase.build_isolated([path])
     assert [c] = ViewerCase.data_payload(html)
@@ -204,21 +317,38 @@ defmodule TestLens.DoltTest do
   end
 
   test "Viewer.build shows db_writes 0 for a dolt_op-only case" do
+    op = %{action: "diff", branch: "compare-branch"}
+
     module = TestLens.DoltTest.DbZeroViewer
     name = :"test viewer db writes zero"
 
-    Recorder.begin(%{
-      module: module,
-      name: name,
-      pid: self(),
-      file: __ENV__.file,
-      line: __ENV__.line,
-      tags: []
-    })
+    TestLens.capture("dolt diff op — the case's only capture", op,
+      kind: :dolt_op,
+      stage: "setup",
+      annotate: [["action"], ["branch"]]
+    )
 
-    Dolt.capture(self(), %{action: "diff", branch: "compare-branch"})
+    TestLens.capture(
+      "verified: a dolt_op-only case carries zero db_events, so the viewer's db-writes counter reads 0",
+      %{captures: ["dolt_op"], db_events: 0, db_writes: 0},
+      stage: "verify",
+      annotate: [["db_writes"], ["db_events"]]
+    )
 
-    assert {:ok, path} = Recorder.finish(module, name, "passed", 600)
+    TestLens.action "record only a dolt op, then build the viewer over just this case" do
+      Recorder.begin(%{
+        module: module,
+        name: name,
+        pid: self(),
+        file: __ENV__.file,
+        line: __ENV__.line,
+        tags: []
+      })
+
+      Dolt.capture(self(), op)
+
+      assert {:ok, path} = Recorder.finish(module, name, "passed", 600)
+    end
 
     # The viewer's JS computes the db-writes counter from db_events.length, so
     # a dolt_op-only case must embed db_events: []. Assert on this case alone.
