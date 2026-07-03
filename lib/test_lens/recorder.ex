@@ -18,10 +18,14 @@ defmodule TestLens.Recorder do
   See `SPEC.md` for the on-disk contract.
 
   The recorder is defensive on purpose: value sanitization happens on the caller
-  (the test pid) before the cast, and every message handler is wrapped so a
-  poison value or a failing `File.write!` drops that one capture/case (logged
-  once) rather than taking the whole run's recording down with it. Run it under a
-  supervisor (see `TestLens.start/1`) so even an unexpected crash restarts it.
+  (the test pid) before every cast — captures, db-events and begin tags are all
+  coerced JSON-safe there — and `write_case` sanitizes the whole document once
+  more as a last line of defense, so an unsanitized field degrades to a safe
+  string instead of dropping the case. Every message handler is still wrapped so
+  a genuinely unwritable case (a failing `File.write!`) drops that one case
+  (logged once) rather than taking the whole run's recording down with it. Run it
+  under a supervisor (see `TestLens.start/1`) so even an unexpected crash restarts
+  it.
   """
   use GenServer
   require Logger
@@ -36,7 +40,9 @@ defmodule TestLens.Recorder do
     GenServer.start_link(__MODULE__, opts, gen_opts)
   end
 
-  def begin(meta), do: cast({:begin, meta})
+  # Tags can carry raw ExUnit context values (refs, pids, functions); sanitize
+  # them on the caller so nothing unencodable rides into the case via begin.
+  def begin(meta), do: cast({:begin, Map.update(meta, :tags, [], &JSON.sanitize/1)})
   def put_stage(pid, stage), do: cast({:stage, pid, stage})
 
   # Sanitize on the caller (the test pid) *before* the cast, so the recorder
@@ -44,7 +50,9 @@ defmodule TestLens.Recorder do
   def add_capture(pid, label, kind, value, stage, paths \\ []),
     do: cast({:capture, pid, label, kind, JSON.sanitize(value), stage, sanitize_paths(paths)})
 
-  def add_db_event(pid, event), do: cast({:db_event, pid, event})
+  # Sanitize the event on the caller too, mirroring add_capture, so a poison
+  # db-event value can't ride into the case document unencoded.
+  def add_db_event(pid, event), do: cast({:db_event, pid, JSON.sanitize(event)})
 
   @doc """
   Flush a finished test to disk. Returns {:ok, path} | {:error, reason} | :ignored.
@@ -236,7 +244,7 @@ defmodule TestLens.Recorder do
       name: to_string(name),
       file: relative(meta[:file]),
       line: meta[:line],
-      tags: meta[:tags] || [],
+      tags: JSON.sanitize(meta[:tags] || []),
       stage: "setup",
       captures: [],
       db_events: []
@@ -263,7 +271,12 @@ defmodule TestLens.Recorder do
 
     filename = slug(state.project, acc.module, acc.name) <> ".json"
     path = Path.join(state.cases_dir, filename)
-    File.write!(path, Jason.encode!(payload, pretty: true))
+    # Last line of defense: the entry points already sanitize, but coerce the
+    # whole document once more so any future unsanitized field degrades to a safe
+    # string rather than dropping the case. The drop-and-log rescue still guards
+    # a genuinely unwritable case (an `File.write!` that fails), which sanitizing
+    # cannot fix.
+    File.write!(path, Jason.encode!(JSON.sanitize(payload), pretty: true))
     path
   end
 
