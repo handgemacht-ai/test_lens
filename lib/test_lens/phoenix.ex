@@ -13,8 +13,11 @@ defmodule TestLens.Phoenix do
 
   There is no compile-time dependency on Phoenix — this only listens for the
   standard `[:phoenix, :endpoint, :stop]` event by name and reads plain `conn`
-  fields. Values under obviously sensitive keys (password, token, secret,
-  authorization, api key) are redacted before they are recorded.
+  fields: the request method, path and params, and the response status and body.
+  Values under obviously sensitive keys (password, token, secret, api key,
+  credential) are redacted from those before they are recorded. Request headers
+  are not captured yet, so an `authorization` header is neither recorded nor
+  redacted today.
   """
 
   alias TestLens.{JSON, Recorder}
@@ -99,20 +102,31 @@ defmodule TestLens.Phoenix do
     _ -> inspect(body)
   end
 
-  # Recursively blank out values whose key looks sensitive. Runs before
-  # JSON.sanitize, which handles everything else (structs, tuples, atoms…).
-  defp redact(value), do: value |> do_redact() |> JSON.sanitize()
+  # Blank out values whose key looks sensitive. JSON.sanitize runs first, so the
+  # walk sees plain data with string keys: structs are already flattened to maps
+  # and tuples to lists, both of which the pre-sanitize version skipped and let
+  # secrets leak through. Order is load-bearing — do not redact before sanitize.
+  defp redact(value), do: value |> JSON.sanitize() |> do_redact()
 
-  defp do_redact(map) when is_map(map) and not is_struct(map) do
+  defp do_redact(map) when is_map(map) do
     Map.new(map, fn {k, v} ->
       if sensitive?(k), do: {k, "[redacted]"}, else: {k, do_redact(v)}
     end)
   end
 
+  # A tuple or keyword pair survives JSON.sanitize as a 2-element [key, value]
+  # list, so the key position is gone unless we look for it here. Treat element 0
+  # as the key and blank a sensitive value the same as a map key would be — this
+  # is the clause that catches an `authorization` header tuple or an
+  # `[api_key: ...]` keyword entry, which the generic list clause below walks as
+  # plain data and leaks. Must stay above that clause.
+  defp do_redact([key, value]) when is_binary(key) do
+    if sensitive?(key), do: [key, "[redacted]"], else: [do_redact(key), do_redact(value)]
+  end
+
   defp do_redact(list) when is_list(list), do: Enum.map(list, &do_redact/1)
   defp do_redact(other), do: other
 
-  defp sensitive?(key) when is_atom(key), do: sensitive?(Atom.to_string(key))
   defp sensitive?(key) when is_binary(key), do: Regex.match?(@redact, key)
   defp sensitive?(_), do: false
 end
