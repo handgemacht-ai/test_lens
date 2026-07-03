@@ -20,7 +20,15 @@ defmodule TestLens.Ecto do
   end
 
   @doc false
+  # A raise here would make :telemetry detach the handler for the rest of the
+  # run, silencing DB capture, so one odd query must never take it down.
   def handle(_event, _measurements, metadata, _config) do
+    record(metadata)
+  rescue
+    _ -> :ok
+  end
+
+  defp record(metadata) do
     sql = Map.get(metadata, :query, "")
 
     case op(sql) do
