@@ -45,6 +45,7 @@ defmodule TestLens.Viewer do
       template()
       |> String.replace("__SHARED_CSS__", TestLens.Assets.css())
       |> String.replace("__SHARED_JS__", TestLens.Assets.js())
+      |> String.replace("__HLJS__", TestLens.Assets.hljs())
       |> String.replace("__SKIPPED__", Integer.to_string(skipped))
       |> String.replace("__CASES_JSON__", json)
 
@@ -165,8 +166,6 @@ defmodule TestLens.Viewer do
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Test Lens</title>
     <style>
-      @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&display=swap');
-
       :root {
         --bg: #090b10; --bg-2: #0c0f16; --panel: #11151e; --panel-2: #161b27;
         --line: #222a38; --line-2: #2c3445; --text: #e9ecf3; --muted: #8a93a6;
@@ -176,7 +175,9 @@ defmodule TestLens.Viewer do
         --in: #41c9e3; --act: #a98bff; --out: #fb7faf;   /* refraction channels */
         --ins: #45d49a; --del: #fb6f78; --upd: #f4b740;  /* delta signs */
         --mono: ui-monospace, "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace;
-        --display: "Space Grotesk", system-ui, "Segoe UI", sans-serif;
+        /* Offline by design: Space Grotesk if the reader has it, else a deliberate
+           system stack. No web-font request — the page is fully self-contained. */
+        --display: "Space Grotesk", "Avenir Next", "Segoe UI", system-ui, -apple-system, sans-serif;
         --row-h: 32px;
       }
 
@@ -186,12 +187,12 @@ defmodule TestLens.Viewer do
         margin: 0; background: var(--bg); color: var(--text);
         font: 13.5px/1.55 var(--mono);
         -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility;
-        display: grid; grid-template-rows: auto 1fr; height: 100vh; overflow: hidden;
+        display: grid; grid-template-rows: auto 1fr; grid-template-columns: minmax(0, 1fr); height: 100vh; overflow: hidden;
       }
 
       /* ---------- instrument header ---------- */
       .bar {
-        display: flex; align-items: center; gap: 26px;
+        display: flex; align-items: center; gap: 16px 26px; flex-wrap: wrap; min-width: 0;
         padding: 13px 22px; border-bottom: 1px solid var(--line);
         background: linear-gradient(180deg, #0d1019, var(--bg));
       }
@@ -206,7 +207,7 @@ defmodule TestLens.Viewer do
       .word { font: 600 16px/1 var(--display); letter-spacing: 3px; }
       .word i { color: var(--gold); font-style: normal; margin: 0 1px; }
 
-      .readout { display: flex; align-items: center; gap: 16px; min-width: 0; }
+      .readout { display: flex; align-items: center; gap: 16px; min-width: 0; flex-wrap: wrap; }
       .meter {
         width: 132px; height: 6px; border-radius: 999px;
         background: rgba(255,255,255,.06); overflow: hidden; flex: none;
@@ -221,7 +222,7 @@ defmodule TestLens.Viewer do
       .skipwarn { display: inline-flex; align-items: center; gap: 5px; color: var(--upd); font-size: 11px; letter-spacing: .3px; white-space: nowrap; }
 
       /* ---------- bench ---------- */
-      .bench { display: grid; grid-template-columns: 372px 1fr; min-height: 0; }
+      .bench { display: grid; grid-template-columns: 372px minmax(0, 1fr); min-height: 0; min-width: 0; }
 
       /* ---------- tray (left) ---------- */
       .tray { display: flex; flex-direction: column; min-height: 0; border-right: 1px solid var(--line); background: var(--bg-2); }
@@ -298,8 +299,10 @@ defmodule TestLens.Viewer do
       .nomatch { padding: 40px 20px; text-align: center; color: var(--faint); font-size: 12.5px; }
 
       /* ---------- stage view (right) ---------- */
-      .stage-view { overflow: auto; min-height: 0; background: var(--bg); }
-      .spec { padding: 24px 28px 60px; max-width: 1280px; margin: 0 auto; }
+      .stage-view { overflow: auto; min-height: 0; min-width: 0; background: var(--bg); }
+      /* The spec is the query container: the phase columns react to *its* width,
+         not the viewport's, so they lay out correctly inside the admin iframe. */
+      .spec { padding: 24px 28px 60px; max-width: 1280px; margin: 0 auto; container: bench / inline-size; }
       @media (prefers-reduced-motion: no-preference) {
         .spec { animation: focusin .18s ease both; }
         @keyframes focusin { from { opacity: 0; transform: translateY(5px); filter: blur(1.5px); } to { opacity: 1; transform: none; filter: none; } }
@@ -319,16 +322,27 @@ defmodule TestLens.Viewer do
       .tag.proj { color: var(--gold); border-color: rgba(244,183,64,.3); }
       .spec-back { display: none; appearance: none; background: var(--panel); border: 1px solid var(--line); color: var(--text); border-radius: 8px; padding: 7px 12px; font: 600 12px var(--mono); cursor: pointer; margin-bottom: 16px; }
 
-      /* the refraction beam: rings align over the channel columns below */
-      .beam { display: grid; gap: 0; position: relative; margin: 22px 0 0; height: 30px; }
+      /* the refraction beam: rings align over the channel columns below. Shown
+         only when the columns are side by side (see the container query). */
+      .beam { display: none; gap: 0; position: relative; margin: 22px 0 0; height: 30px;
+        grid-template-columns: repeat(var(--cols, 3), minmax(0, 1fr)); }
       .beam::before { content: ""; position: absolute; left: 8%; right: 8%; top: 14px; height: 2px;
         background: linear-gradient(90deg, var(--in), var(--act), var(--out)); opacity: .55; border-radius: 2px; }
       .ap { display: flex; align-items: center; justify-content: center; position: relative; }
       .ring { width: 13px; height: 13px; border-radius: 50%; background: var(--bg); position: relative; z-index: 1; box-shadow: 0 0 0 2px currentColor, 0 0 12px currentColor; }
       .ap.in { color: var(--in); } .ap.act { color: var(--act); } .ap.out { color: var(--out); }
 
-      .axis { display: grid; gap: 14px; margin-top: 6px; align-items: start; }
-      .chan { border: 1px solid var(--line); border-radius: 12px; background: var(--panel); overflow: hidden; min-width: 0; }
+      /* Stacked full-width by default; balanced columns only when the spec is
+         genuinely wide. Narrow (the iframe, mobile) never squeezes three columns. */
+      .axis { display: grid; gap: 14px; margin-top: 14px; align-items: start; grid-template-columns: minmax(0, 1fr); }
+      @container bench (min-width: 1100px) {
+        .beam { display: grid; }
+        .axis { margin-top: 6px; grid-template-columns: repeat(var(--cols, 3), minmax(0, 1fr)); }
+      }
+      /* Each channel is its own query container so a collapsed source row reacts
+         to the *column* width (narrow in 3-up, wide when stacked). overflow is
+         visible so the source peek popover is not clipped. */
+      .chan { border: 1px solid var(--line); border-radius: 12px; background: var(--panel); overflow: visible; min-width: 0; container: bench / inline-size; }
       .chan-h { display: flex; align-items: center; gap: 8px; padding: 11px 14px; font: 600 11px/1 var(--display); letter-spacing: 1.6px; border-bottom: 1px solid var(--line); }
       .chan.in .chan-h { color: var(--in); } .chan.act .chan-h { color: var(--act); } .chan.out .chan-h { color: var(--out); }
       .chan-h .ci { font: 600 10px/1 var(--mono); opacity: .6; letter-spacing: 0; }
@@ -352,12 +366,13 @@ defmodule TestLens.Viewer do
 
       /* ---------- responsive floor ---------- */
       @media (max-width: 880px) {
-        .bench { grid-template-columns: 1fr; }
+        .bench { grid-template-columns: minmax(0, 1fr); }
         .stage-view { display: none; }
         body.focus .tray { display: none; }
         body.focus .stage-view { display: block; }
         .spec-back { display: inline-flex; }
         .spec-side { max-width: 50%; }
+        .spec { padding: 20px 15px 44px; }
       }
     </style>
     </head>
@@ -386,6 +401,7 @@ defmodule TestLens.Viewer do
         <section class="stage-view" id="detail"></section>
       </div>
 
+      <script>__HLJS__</script>
       <script id="data" type="application/json">__CASES_JSON__</script>
       <script>
       const CASES = JSON.parse(document.getElementById("data").textContent);
@@ -563,12 +579,13 @@ defmodule TestLens.Viewer do
               `</div>` +
               `<div class="spec-side">${tags}${c.project ? `<span class="tag proj">${esc(c.project)}</span>` : ""}</div>` +
             `</div>` +
-            `<div class="beam" style="grid-template-columns:repeat(${stages.length},1fr)">${stages.map(s => `<div class="ap ${s.key}"><span class="ring"></span></div>`).join("")}</div>` +
-            `<div class="axis" style="grid-template-columns:repeat(${stages.length},1fr)">` +
+            `<div class="beam" style="--cols:${stages.length}">${stages.map(s => `<div class="ap ${s.key}"><span class="ring"></span></div>`).join("")}</div>` +
+            `<div class="axis" style="--cols:${stages.length}">` +
               stages.map(s => `<div class="chan ${s.key}"><div class="chan-h"><span class="ci">${s.idx}</span>${esc(s.label)}</div>` +
                 `<div class="chan-body">${s.items.length ? s.items.map(itemHtml).join("") : '<div class="none">nothing captured here</div>'}</div></div>`).join("") +
             `</div>` +
           `</div>`;
+        hydrateBlocks(d);
         const back = $("back");
         if (back) back.onclick = () => document.body.classList.remove("focus");
       }
@@ -615,6 +632,7 @@ defmodule TestLens.Viewer do
       });
 
       /* ---------- boot ---------- */
+      wireBlocks($("detail"));
       renderReadout();
       renderControls();
       rebuild(true);
