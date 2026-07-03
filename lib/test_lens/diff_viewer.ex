@@ -48,6 +48,7 @@ defmodule TestLens.DiffViewer do
     template()
     |> String.replace("__SHARED_CSS__", TestLens.Assets.css())
     |> String.replace("__SHARED_JS__", TestLens.Assets.js())
+    |> String.replace("__HLJS__", TestLens.Assets.hljs())
     |> String.replace("__DIFF_JSON__", json)
   end
 
@@ -74,8 +75,6 @@ defmodule TestLens.DiffViewer do
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Test Lens — Diff</title>
     <style>
-      @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&display=swap');
-
       :root {
         --bg: #090b10; --bg-2: #0c0f16; --panel: #11151e; --panel-2: #161b27;
         --line: #222a38; --line-2: #2c3445; --text: #e9ecf3; --muted: #8a93a6;
@@ -86,7 +85,8 @@ defmodule TestLens.DiffViewer do
         --ins: #45d49a; --del: #fb6f78; --upd: #f4b740;
         --add: #45d49a; --rem: #fb6f78; --flip: #f4b740; --chg: #a98bff;
         --mono: ui-monospace, "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace;
-        --display: "Space Grotesk", system-ui, "Segoe UI", sans-serif;
+        /* Offline by design: local Space Grotesk if present, else a system stack. */
+        --display: "Space Grotesk", "Avenir Next", "Segoe UI", system-ui, -apple-system, sans-serif;
       }
 
       * { box-sizing: border-box; }
@@ -189,23 +189,32 @@ defmodule TestLens.DiffViewer do
       .cc.add { color: var(--add); background: rgba(69,212,154,.1); border-color: rgba(69,212,154,.3); }
       .cc.rem { color: var(--rem); background: rgba(251,111,120,.1); border-color: rgba(251,111,120,.3); }
 
-      .sides { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 12px; }
-      .sides.one { grid-template-columns: 1fr; }
-      .side { border: 1px solid var(--line); border-radius: 12px; background: var(--panel); padding: 13px 15px 16px; min-width: 0; }
+      .sides { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; margin-top: 12px; }
+      .sides.one { grid-template-columns: minmax(0, 1fr); }
+      /* Each side is the query container for its own phase columns, so a narrow
+         side (two side by side, or the iframe) stacks its channels full-width. */
+      .side { border: 1px solid var(--line); border-radius: 12px; background: var(--panel); padding: 13px 15px 16px; min-width: 0; container: bench / inline-size; }
       .side-h { display: flex; align-items: baseline; gap: 9px; flex-wrap: wrap; padding-bottom: 11px; border-bottom: 1px solid var(--line); margin-bottom: 4px; }
       .slabel { font: 600 11px/1 var(--display); letter-spacing: 1.6px; color: var(--gold); }
       .side-h .dim { color: var(--faint); font-size: 11px; }
 
-      /* the refraction beam: rings align over the channel columns below */
-      .beam { display: grid; gap: 0; position: relative; margin: 16px 0 0; height: 26px; }
+      /* the refraction beam: shown only when the columns are side by side */
+      .beam { display: none; gap: 0; position: relative; margin: 16px 0 0; height: 26px;
+        grid-template-columns: repeat(var(--cols, 3), minmax(0, 1fr)); }
       .beam::before { content: ""; position: absolute; left: 8%; right: 8%; top: 12px; height: 2px;
         background: linear-gradient(90deg, var(--in), var(--act), var(--out)); opacity: .55; border-radius: 2px; }
       .ap { display: flex; align-items: center; justify-content: center; position: relative; }
       .ring { width: 12px; height: 12px; border-radius: 50%; background: var(--bg); position: relative; z-index: 1; box-shadow: 0 0 0 2px currentColor, 0 0 12px currentColor; }
       .ap.in { color: var(--in); } .ap.act { color: var(--act); } .ap.out { color: var(--out); }
 
-      .axis { display: grid; gap: 12px; margin-top: 4px; align-items: start; }
-      .chan { border: 1px solid var(--line); border-radius: 12px; background: var(--bg-2); overflow: hidden; min-width: 0; }
+      .axis { display: grid; gap: 12px; margin-top: 12px; align-items: start; grid-template-columns: minmax(0, 1fr); }
+      @container bench (min-width: 1100px) {
+        .beam { display: grid; }
+        .axis { margin-top: 4px; grid-template-columns: repeat(var(--cols, 3), minmax(0, 1fr)); }
+      }
+      /* Each channel is its own query container so a collapsed source row reacts
+         to the column width; overflow visible keeps the source peek unclipped. */
+      .chan { border: 1px solid var(--line); border-radius: 12px; background: var(--bg-2); overflow: visible; min-width: 0; container: bench / inline-size; }
       .chan-h { display: flex; align-items: center; gap: 8px; padding: 10px 13px; font: 600 11px/1 var(--display); letter-spacing: 1.6px; border-bottom: 1px solid var(--line); }
       .chan.in .chan-h { color: var(--in); } .chan.act .chan-h { color: var(--act); } .chan.out .chan-h { color: var(--out); }
       .chan-h .ci { font: 600 10px/1 var(--mono); opacity: .6; letter-spacing: 0; }
@@ -229,7 +238,7 @@ defmodule TestLens.DiffViewer do
       .empty b { color: var(--text); }
 
       @media (max-width: 760px) {
-        .sides { grid-template-columns: 1fr; }
+        .sides { grid-template-columns: minmax(0, 1fr); }
         .counts { margin-left: 0; }
       }
     </style>
@@ -242,6 +251,7 @@ defmodule TestLens.DiffViewer do
       </header>
       <main id="main"></main>
 
+      <script>__HLJS__</script>
       <script id="data" type="application/json">__DIFF_JSON__</script>
       <script>
       const DIFF = JSON.parse(document.getElementById("data").textContent);
@@ -275,8 +285,8 @@ defmodule TestLens.DiffViewer do
 
       function caseStages(c) {
         const stages = buildStages(c);
-        return `<div class="beam" style="grid-template-columns:repeat(${stages.length},1fr)">${stages.map(s => `<div class="ap ${s.key}"><span class="ring"></span></div>`).join("")}</div>` +
-          `<div class="axis" style="grid-template-columns:repeat(${stages.length},1fr)">` +
+        return `<div class="beam" style="--cols:${stages.length}">${stages.map(s => `<div class="ap ${s.key}"><span class="ring"></span></div>`).join("")}</div>` +
+          `<div class="axis" style="--cols:${stages.length}">` +
           stages.map(s => `<div class="chan ${s.key}"><div class="chan-h"><span class="ci">${s.idx}</span>${esc(s.label)}</div>` +
             `<div class="chan-body">${s.items.length ? s.items.map(itemHtml).join("") : '<div class="none">nothing captured here</div>'}</div></div>`).join("") +
           `</div>`;
@@ -352,12 +362,16 @@ defmodule TestLens.DiffViewer do
           panel.innerHTML = buildPanel(btn.dataset.sec, +btn.dataset.i);
           panel.dataset.built = "1";
         }
-        if (panel.hasAttribute("hidden")) { panel.removeAttribute("hidden"); btn.classList.add("open"); }
+        if (panel.hasAttribute("hidden")) {
+          panel.removeAttribute("hidden"); btn.classList.add("open");
+          hydrateBlocks(panel);
+        }
         else { panel.setAttribute("hidden", ""); btn.classList.remove("open"); }
       });
 
       renderHeader();
       renderMain();
+      wireBlocks($("main"));
       </script>
     </body>
     </html>
