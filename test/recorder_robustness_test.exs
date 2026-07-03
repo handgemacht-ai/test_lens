@@ -2,8 +2,10 @@ defmodule TestLens.RecorderRobustnessTest do
   @moduledoc """
   Recorder robustness and run lifecycle:
 
-    * a poison capture (or a failed write) drops that one case and the recorder
-      keeps recording the rest of the run;
+    * a Reference/pid/function smuggled into a capture or into begin metadata is
+      coerced to its safe string form and the case is written, not dropped;
+    * a genuinely unwritable case (a failing `File.write!`) drops that one case,
+      is logged once, and the recorder keeps recording the rest of the run;
     * booting without recording creates no run directory and does not repoint
       `runs/latest`;
     * a real run writes cases + `meta.json` and `latest` points to it;
@@ -14,7 +16,7 @@ defmodule TestLens.RecorderRobustnessTest do
 
   This file also dogfoods TestLens on itself: each test wraps its flow in the
   `setup`/`action`/`verify` block macros and captures the decisive values — the
-  seeded pointer, the written `meta.json`, the poison payload, the drop counter —
+  seeded pointer, the written `meta.json`, the coerced exotics, the drop counter —
   so each test's *own* rendered page reads as input → action → result. The
   recorder *under test* is addressed directly by its `pid`; the dogfood
   `TestLens.capture` calls go to the shared named Recorder keyed by `self()`, so
@@ -22,6 +24,8 @@ defmodule TestLens.RecorderRobustnessTest do
   """
   use ExUnit.Case, async: false
   use TestLens.Case
+
+  import ExUnit.CaptureLog
 
   alias TestLens.{JSON, Recorder}
 
@@ -152,37 +156,120 @@ defmodule TestLens.RecorderRobustnessTest do
   end
 
   describe "never-die recorder" do
-    test "survives a poison capture and later captures still record" do
-      TestLens.setup "a fresh recorder and a poison payload it will choke on" do
+    test "coerces a Reference/pid/function in a capture or metadata instead of dropping" do
+      TestLens.setup "a recorder plus the three non-JSON-encodable types to smuggle in" do
         dir = tmp_dir()
         pid = start_recorder(dir)
 
-        # The poison: a raw reference cast straight in, bypassing the caller-side
-        # sanitize, so `write_case`'s `Jason.encode!` raises on it.
+        ref = make_ref()
+        test_pid = self()
+        fun = fn x -> x end
+
+        # The exotics that must reach disk as their inspect strings — not drop the
+        # case the way a raw Reference would if it hit Jason.encode! unsanitized.
         TestLens.capture(
-          "poison payload",
-          %{label: "boom", kind: "json", value: "a raw Reference — not JSON-encodable"}
+          "smuggled reference-type values",
+          %{ref: inspect(ref), pid: inspect(test_pid), fun: "a function"}
         )
       end
 
-      TestLens.action "record a poison case (dropped), then a healthy case (recorded)" do
-        # A capture holding a non-JSON-encodable value (a reference), cast directly
-        # so it bypasses the caller-side sanitize and lands raw in the accumulator.
-        # write_case's Jason.encode! then raises — that one case must be dropped,
-        # not fatal.
-        begin(pid, Rob.Poison, :"poison case")
-        GenServer.cast(pid, {:capture, self(), "boom", "json", make_ref(), "action", []})
+      TestLens.action "cast raw exotics into a capture AND into begin tags, bypassing the caller-side sanitize" do
+        # A begin whose metadata tags carry raw exotics (as unflattened ExUnit
+        # context tags could), cast directly so it skips Recorder.begin's sanitize.
+        GenServer.cast(
+          pid,
+          {:begin,
+           %{
+             module: Rob.Coerce,
+             name: :"coerces exotics",
+             pid: test_pid,
+             file: __ENV__.file,
+             line: 1,
+             tags: [ref, test_pid]
+           }}
+        )
 
-        assert {:error, :write_failed} =
-                 GenServer.call(pid, {:finish, Rob.Poison, :"poison case", "passed", 1_000, %{}})
+        # A capture holding raw exotics, cast directly so it lands unsanitized in
+        # the accumulator — exactly what a future unsanitized path would produce.
+        GenServer.cast(
+          pid,
+          {:capture, test_pid, "exotics", "json", %{ref: ref, pid: test_pid, fun: fun}, "action",
+           []}
+        )
 
-        # The recorder is still alive and still recording.
+        assert {:ok, path} =
+                 GenServer.call(
+                   pid,
+                   {:finish, Rob.Coerce, :"coerces exotics", "passed", 1_000, %{}}
+                 )
+
+        assert File.exists?(path)
+        data = path |> File.read!() |> Jason.decode!()
+
+        TestLens.capture("finish outcome (the case was written, not dropped)", "{:ok, path}")
+      end
+
+      TestLens.verify "the exotics are written as their safe inspect strings and the case survives" do
+        cap = hd(data["captures"])
+        assert cap["value"]["ref"] == inspect(ref)
+        assert cap["value"]["pid"] == inspect(test_pid)
+        assert String.starts_with?(cap["value"]["fun"], "#Function<")
+
+        # The metadata tags carried exotics too, and were coerced the same way.
+        assert inspect(ref) in data["tags"]
+        assert inspect(test_pid) in data["tags"]
+
+        # It counts as a real recorded case — proof it was coerced, not dropped.
+        :ok = GenServer.call(pid, :finalize)
+        %{run_dir: run_dir} = GenServer.call(pid, :run_info)
+        meta = run_dir |> Path.join("meta.json") |> File.read!() |> Jason.decode!()
+        assert meta["case_count"] == 1
+
+        TestLens.capture(
+          "coerced exotics written to the case",
+          %{capture_value: cap["value"], tags: data["tags"], case_count: meta["case_count"]},
+          annotate: [["capture_value", "ref"], ["tags"], ["case_count"]]
+        )
+      end
+    end
+
+    test "a genuinely unwritable case is dropped-and-logged and the recorder keeps recording" do
+      TestLens.setup "a recorder whose next case cannot be written to disk" do
+        dir = tmp_dir()
+        pid = start_recorder(dir)
+        begin(pid, Rob.Unwritable, :"cannot be written")
+
+        # Plant a *file* where the run's cases directory must go, so write_case's
+        # File.mkdir_p! raises — a failure sanitizing cannot fix, leaving the
+        # drop-and-log rescue as the only thing that can keep the run alive.
+        %{run_dir: run_dir} = GenServer.call(pid, :run_info)
+        File.mkdir_p!(run_dir)
+        File.write!(Path.join(run_dir, "cases"), "not a directory")
+
+        TestLens.capture(
+          "blocker planted at the cases path",
+          "a file where the cases dir must go"
+        )
+      end
+
+      TestLens.action "finish the unwritable case (dropped, logged once), then record a healthy one" do
+        # capture_log keeps the expected warning out of the suite's own output
+        # while still letting us assert it was emitted.
+        log =
+          capture_log(fn ->
+            assert {:error, :write_failed} =
+                     GenServer.call(
+                       pid,
+                       {:finish, Rob.Unwritable, :"cannot be written", "passed", 1_000, %{}}
+                     )
+          end)
+
+        # The recorder shrugged off the write failure and is still recording.
         assert Process.alive?(pid)
 
-        # Direct cast (the isolated recorder is unnamed, so the named-target public
-        # add_capture/5 can't reach it) with a caller-sanitized value, exactly the
-        # shape add_capture would produce.
-        begin(pid, Rob.Healthy, :"healthy case")
+        # Clear the blocker; the very next case must still record cleanly.
+        File.rm!(Path.join(run_dir, "cases"))
+        begin(pid, Rob.Healthy, :"records after the drop")
 
         GenServer.cast(
           pid,
@@ -190,34 +277,41 @@ defmodule TestLens.RecorderRobustnessTest do
         )
 
         assert {:ok, good_path} =
-                 GenServer.call(pid, {:finish, Rob.Healthy, :"healthy case", "passed", 500, %{}})
+                 GenServer.call(
+                   pid,
+                   {:finish, Rob.Healthy, :"records after the drop", "passed", 500, %{}}
+                 )
 
         TestLens.capture(
-          "finish outcomes",
-          %{poison: "{:error, :write_failed}", healthy: "{:ok, path}"}
+          "backstop outcome",
+          %{drop: "{:error, :write_failed}", recovery: "{:ok, path}"}
         )
       end
 
-      TestLens.verify "the healthy case is on disk intact and meta counts only the survivor" do
+      TestLens.verify "the drop was logged once, the recorder survived, and the next case recorded" do
+        assert String.contains?(log, "dropped a write_case")
+        assert Process.alive?(pid)
+
         data = good_path |> File.read!() |> Jason.decode!()
-        assert data["name"] == "healthy case"
+        assert data["name"] == "records after the drop"
         assert [cap] = data["captures"]
         assert cap["value"] == %{"hello" => "world"}
 
-        # Exactly the healthy case counts; the poison one is gone from meta.
+        # Only the survivor is counted — the dropped case left no trace.
         :ok = GenServer.call(pid, :finalize)
         %{run_dir: run_dir} = GenServer.call(pid, :run_info)
         meta = run_dir |> Path.join("meta.json") |> File.read!() |> Jason.decode!()
         assert meta["case_count"] == 1
 
-        # The healthy capture that landed after the poison one was dropped.
-        TestLens.capture("healthy case (recorded after poison)", data,
-          annotate: [["name"], ["captures", 0, "value"]]
-        )
-
-        # meta.json counts exactly one case — the poison one left no trace.
-        TestLens.capture("meta.json — poison dropped, one survivor", meta,
-          annotate: [["case_count"]]
+        TestLens.capture(
+          "drop-and-log backstop held",
+          %{
+            recorder_alive: Process.alive?(pid),
+            logged: String.contains?(log, "dropped a write_case"),
+            survivor: data["name"],
+            case_count: meta["case_count"]
+          },
+          annotate: [["recorder_alive"], ["logged"], ["case_count"]]
         )
       end
     end
