@@ -6,7 +6,7 @@ defmodule TestLens.AnnotateTest do
   """
   use ExUnit.Case, async: false
 
-  alias TestLens.{Recorder, Viewer}
+  alias TestLens.{Recorder, ViewerCase}
 
   defp begin(module, name) do
     Recorder.begin(%{
@@ -17,12 +17,6 @@ defmodule TestLens.AnnotateTest do
       line: __ENV__.line,
       tags: []
     })
-  end
-
-  defp build_html do
-    dir = Application.get_env(:test_lens, :dir, "test_lens_out")
-    {:ok, html_path, _count} = Viewer.build(dir: dir)
-    File.read!(html_path)
   end
 
   test "annotate writes the path into the case and the HTML highlights the resolved value" do
@@ -46,15 +40,17 @@ defmodule TestLens.AnnotateTest do
     assert cap["paths"] == [["data", "creator"]]
     assert cap["value"]["data"]["creator"] == "alice"
 
-    html = build_html()
+    # Build against only this case: the annotation path and its resolved value
+    # must reach the payload the readout renderer draws from. (The bare presence
+    # of the annoHtml function proved nothing — it is in the shared JS even for
+    # an empty viewer.)
+    html = ViewerCase.build_isolated([path])
+    assert [c] = ViewerCase.data_payload(html)
+    assert [embedded] = c["captures"]
 
-    assert String.contains?(html, ~s("paths":[["data","creator"]])),
-           "expected the annotation path embedded for the readout"
-
-    assert String.contains?(html, "alice"), "expected the resolved value in the HTML"
-
-    assert String.contains?(html, "function annoHtml"),
-           "expected the viewer to carry the annotation readout renderer"
+    assert embedded["paths"] == [["data", "creator"]]
+    assert embedded["value"]["data"]["creator"] == "alice"
+    assert String.contains?(html, ~s("paths":[["data","creator"]]))
   end
 
   test "a capture with no annotate renders normally and omits the paths key" do
@@ -73,13 +69,16 @@ defmodule TestLens.AnnotateTest do
     refute Map.has_key?(cap, "paths")
     assert cap["value"]["hello"] == "world"
 
-    html = build_html()
-    assert String.contains?(html, "world")
+    html = ViewerCase.build_isolated([path])
+    assert [c] = ViewerCase.data_payload(html)
+    assert [embedded] = c["captures"]
+    refute Map.has_key?(embedded, "paths")
+    assert embedded["value"]["hello"] == "world"
   end
 
   test "an old-style v1 case with no paths key still builds" do
-    dir = Application.get_env(:test_lens, :dir, "test_lens_out")
-    cases_dir = Path.join(dir, "cases")
+    run = ViewerCase.tmp_dir("test_lens_legacy")
+    cases_dir = Path.join(run, "cases")
     File.mkdir_p!(cases_dir)
 
     legacy = %{
@@ -106,9 +105,16 @@ defmodule TestLens.AnnotateTest do
 
     File.write!(Path.join(cases_dir, "legacy-v1-case.json"), Jason.encode!(legacy))
 
-    html = build_html()
-    assert String.contains?(html, "old v1 case")
-    assert String.contains?(html, "test_lens/v1")
+    {:ok, html_path, count} = TestLens.Viewer.build(dir: run)
+    assert count == 1
+    html = File.read!(html_path)
+
+    assert [c] = ViewerCase.data_payload(html)
+    assert c["schema"] == "test_lens/v1"
+    assert c["name"] == "old v1 case"
+    # the v1 capture carries no `paths` key and still lands in the payload
+    assert [cap] = c["captures"]
+    refute Map.has_key?(cap, "paths")
   end
 
   test "an annotate path that matches nothing renders the matched-no-value marker" do
@@ -130,12 +136,15 @@ defmodule TestLens.AnnotateTest do
     assert cap["paths"] == [["data", "nonexistent"]]
     refute Map.has_key?(cap["value"]["data"], "nonexistent")
 
-    html = build_html()
+    # The unresolved path must reach the payload so the client renders the
+    # miss marker for it. ("annotation matched no value" is a JS string literal
+    # present even in an empty viewer, so asserting on it proved nothing.)
+    html = ViewerCase.build_isolated([path])
+    assert [c] = ViewerCase.data_payload(html)
+    assert [embedded] = c["captures"]
 
-    assert String.contains?(html, ~s("paths":[["data","nonexistent"]])),
-           "expected the unresolved annotation path embedded for rendering"
-
-    assert String.contains?(html, "annotation matched no value"),
-           "expected the matched-no-value marker renderer in the viewer"
+    assert embedded["paths"] == [["data", "nonexistent"]]
+    refute Map.has_key?(embedded["value"]["data"], "nonexistent")
+    assert String.contains?(html, ~s("paths":[["data","nonexistent"]]))
   end
 end

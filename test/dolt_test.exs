@@ -7,7 +7,7 @@ defmodule TestLens.DoltTest do
   """
   use ExUnit.Case, async: false
 
-  alias TestLens.{Dolt, Recorder, Viewer}
+  alias TestLens.{Dolt, Recorder, ViewerCase}
 
   # ---------------------------------------------------------------------------
   # Collector — confirm dolt_op lands in captures, not db_events
@@ -115,7 +115,7 @@ defmodule TestLens.DoltTest do
   # Viewer — HTML contains the action label; db_writes reads out 0
   # ---------------------------------------------------------------------------
 
-  test "Viewer.build renders dolt_op action label in HTML" do
+  test "Viewer.build embeds the dolt_op capture payload the renderer draws from" do
     module = TestLens.DoltTest.ViewerSynthetic
     name = :"test dolt viewer html"
 
@@ -137,17 +137,25 @@ defmodule TestLens.DoltTest do
       message: "Release v2 schema"
     })
 
-    assert {:ok, _path} = Recorder.finish(module, name, "passed", 1_500)
+    assert {:ok, path} = Recorder.finish(module, name, "passed", 1_500)
 
-    dir = Application.get_env(:test_lens, :dir, "test_lens_out")
-    {:ok, html_path, _count} = Viewer.build(dir: dir)
-    html = File.read!(html_path)
+    # Build against an isolated copy of only this case, so the assertions below
+    # cannot be satisfied by another test's data — and so they fail on the empty
+    # viewer that "commit"/"dolt_op" (CSS classes + JS constants) would pass.
+    html = ViewerCase.build_isolated([path])
+    assert [c] = ViewerCase.data_payload(html)
+    assert [dolt] = c["captures"]
 
-    assert String.contains?(html, "commit"),
-           "expected HTML to contain action label 'commit'"
+    assert dolt["kind"] == "dolt_op"
+    assert dolt["stage"] == "action"
+    assert dolt["value"]["action"] == "commit"
+    assert dolt["value"]["branch"] == "deploy/v2"
+    assert dolt["value"]["commit_hash"] == "c0ffee99"
+    assert dolt["value"]["message"] == "Release v2 schema"
 
-    assert String.contains?(html, "dolt_op"),
-           "expected HTML to reference kind 'dolt_op'"
+    # The exact bytes the JS reads for the badge/hash/message must be present.
+    assert String.contains?(html, ~s("kind":"dolt_op"))
+    assert String.contains?(html, ~s("commit_hash":"c0ffee99"))
   end
 
   test "Viewer.build renders unknown kind via generic fallback and escapes malicious line/label values" do
@@ -177,17 +185,20 @@ defmodule TestLens.DoltTest do
     # additional capture for verify stage
     Recorder.add_capture(self(), "output", "text", "normal", "verify")
 
-    assert {:ok, _path} = Recorder.finish(module, name, "passed", 100)
+    assert {:ok, path} = Recorder.finish(module, name, "passed", 100)
 
-    dir = Application.get_env(:test_lens, :dir, "test_lens_out")
-    {:ok, html_path, _count} = Viewer.build(dir: dir)
-    html = File.read!(html_path)
+    html = ViewerCase.build_isolated([path])
+    assert [c] = ViewerCase.data_payload(html)
 
-    # JSON for the "constructor" kind capture must be embedded (generic fallback)
-    assert String.contains?(html, ~s("kind":"constructor")),
-           "expected constructor kind to appear in embedded JSON"
+    # The Object.prototype-colliding kind falls back to the generic JSON block:
+    # it must be embedded verbatim (proving no crash swallowed the capture).
+    constructor = Enum.find(c["captures"], &(&1["kind"] == "constructor"))
+    assert constructor, "expected the constructor-kind capture in the payload"
+    assert constructor["value"] == %{"safe" => true}
+    assert String.contains?(html, ~s("kind":"constructor"))
 
-    # malicious label must not appear unescaped
+    # malicious label must not appear as a live tag — the </ is neutralized so
+    # the browser reads it as JSON text, not markup.
     refute String.contains?(html, "<script>alert(1)</script>"),
            "expected script tag in label to be escaped, not raw"
   end
@@ -207,16 +218,14 @@ defmodule TestLens.DoltTest do
 
     Dolt.capture(self(), %{action: "diff", branch: "compare-branch"})
 
-    assert {:ok, _path} = Recorder.finish(module, name, "passed", 600)
+    assert {:ok, path} = Recorder.finish(module, name, "passed", 600)
 
-    dir = Application.get_env(:test_lens, :dir, "test_lens_out")
-    {:ok, html_path, _count} = Viewer.build(dir: dir)
-    html = File.read!(html_path)
+    # The viewer's JS computes the db-writes counter from db_events.length, so
+    # a dolt_op-only case must embed db_events: []. Assert on this case alone.
+    html = ViewerCase.build_isolated([path])
+    assert [c] = ViewerCase.data_payload(html)
 
-    # The db_events list for this case is empty → _dbn = 0.
-    # The viewer's JS computes _dbn from db_events.length, so the JSON in the
-    # page must have db_events: []. Verify directly against the embedded JSON.
-    assert String.contains?(html, ~s("db_events":[])),
-           "expected db_events to be empty for a dolt_op-only case"
+    assert c["db_events"] == []
+    assert [%{"kind" => "dolt_op"}] = c["captures"]
   end
 end
