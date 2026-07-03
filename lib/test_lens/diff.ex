@@ -175,7 +175,7 @@ defmodule TestLens.Diff do
       |> Path.join("cases/*.json")
       |> Path.wildcard()
       |> Enum.map(&read_json/1)
-      |> Enum.reject(&is_nil/1)
+      |> Enum.filter(&is_map/1)
       |> Map.new(fn c -> {identity(c), c} end)
 
     meta = read_json(Path.join(dir, "meta.json")) || derive_meta(cases)
@@ -186,9 +186,14 @@ defmodule TestLens.Diff do
   @spec identity(map()) :: String.t()
   def identity(c), do: to_string(c["module"]) <> "::" <> to_string(c["name"])
 
-  # ---- internals ----
-
-  defp read_json(path) do
+  @doc """
+  Lenient JSON read: returns the decoded term, or `nil` when the path is not a
+  regular file, cannot be read, or does not hold valid JSON. Shared with
+  `TestLens.Viewer` so a single corrupt or half-written case file is skipped
+  rather than failing the whole build.
+  """
+  @spec read_json(Path.t()) :: term() | nil
+  def read_json(path) do
     with true <- File.regular?(path),
          {:ok, body} <- File.read(path),
          {:ok, data} <- Jason.decode(body) do
@@ -197,6 +202,8 @@ defmodule TestLens.Diff do
       _ -> nil
     end
   end
+
+  # ---- internals ----
 
   defp derive_meta(cases) do
     sample = cases |> Map.values() |> List.first() || %{}
