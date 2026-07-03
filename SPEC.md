@@ -52,6 +52,11 @@ the bare-`mix test` location, but `mix test_lens.run --dir` still overrides it.
 ```
 
 * `<run_id>` is filesystem-safe and unique (see §3).
+* A run directory (and the `runs/latest` pointer) is materialized **lazily**, on
+  the first case a run actually writes. A recorder that boots but records nothing
+  (e.g. a task that starts the app without running tests) leaves no `<run_id>`
+  directory behind and never repoints `latest` — so `latest` always names a run
+  that has at least one case and a `meta.json`.
 * `runs/latest` is a plain text file containing the most recent `run_id`. It is a
   best-effort convenience for humans and tools; the canonical ordering key is
   `run_at` in each `meta.json`. Discovery tools should scan `runs/*/meta.json`
@@ -73,6 +78,7 @@ process-terminate backstop).
 | `git` | object | `{ "branch", "commit", "base_ref", "merge_base" }`; any field may be `null` |
 | `case_count` | integer | number of case files written this run |
 | `status_counts` | object | map of ExUnit status string → count, e.g. `{ "passed": 11, "failed": 1 }` |
+| `dropped_off_pid` | integer | count of casts (captures/db-events/stage marks) that arrived from a pid the recorder could not resolve to a running test and were therefore dropped; `0` for a clean run |
 
 Example:
 

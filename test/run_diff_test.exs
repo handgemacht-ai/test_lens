@@ -11,7 +11,7 @@ defmodule TestLens.RunDiffTest do
   """
   use ExUnit.Case, async: true
 
-  alias TestLens.Diff
+  alias TestLens.{Diff, DiffViewer, ViewerCase}
 
   defp tmp_dir do
     path = Path.join(System.tmp_dir!(), "test_lens_diff_#{System.unique_integer([:positive])}")
@@ -261,6 +261,73 @@ defmodule TestLens.RunDiffTest do
              data["flipped"]
 
     assert {:ok, _dt, _off} = DateTime.from_iso8601(data["generated_at"])
+  end
+
+  test "the rendered diff HTML embeds each category's rows and their values" do
+    root = tmp_dir()
+
+    base =
+      write_run(Path.join(root, "base"), [
+        mk_case("M", "kept", "passed", captures: [cap("action", "resp", "200")]),
+        mk_case("M", "gone", "passed"),
+        mk_case("M", "flip", "passed", captures: [cap("action", "a", "x")]),
+        mk_case("M", "same", "passed", captures: [cap("verify", "v", "1")])
+      ])
+
+    head =
+      write_run(Path.join(root, "head"), [
+        # same status, an extra capture -> changed
+        mk_case("M", "kept", "passed",
+          captures: [cap("action", "resp", "200"), cap("verify", "extra", "z")]
+        ),
+        # new identity -> added
+        mk_case("M", "fresh", "passed"),
+        # status moved -> flipped
+        mk_case("M", "flip", "failed", captures: [cap("action", "a", "x")]),
+        # identical -> unchanged (count only)
+        mk_case("M", "same", "passed", captures: [cap("verify", "v", "1")])
+      ])
+
+    diff = Diff.compute(base, head)
+    html = DiffViewer.render(diff)
+
+    # Rendered structure: a real document carrying the payload the rows draw from.
+    assert html =~ "<!doctype html>"
+    assert html =~ ~s(<script id="data" type="application/json">)
+
+    payload = ViewerCase.data_payload(html)
+
+    assert payload["counts"] == %{
+             "added" => 1,
+             "removed" => 1,
+             "flipped" => 1,
+             "changed" => 1,
+             "unchanged" => 1
+           }
+
+    # added row: the HEAD-only case, with its full identity for the row label.
+    assert [%{"module" => "M", "name" => "fresh"}] = payload["added"]
+
+    # removed row: the BASE-only case.
+    assert [%{"module" => "M", "name" => "gone"}] = payload["removed"]
+
+    # flipped row: both sides, so the row can render passed -> failed.
+    assert [flip] = payload["flipped"]
+    assert flip["id"] == "M::flip"
+    assert flip["base"]["status"] == "passed"
+    assert flip["head"]["status"] == "failed"
+
+    # changed row: the content summary plus both full cases, so the panel can
+    # draw the extra capture value on the HEAD side.
+    assert [changed] = payload["changed"]
+    assert changed["id"] == "M::kept"
+    assert changed["summary"]["captures"] == %{"base" => 1, "head" => 2}
+    assert "+ verify/extra" in changed["summary"]["capture_changes"]
+
+    head_values =
+      changed["head"]["captures"] |> Enum.map(& &1["value"]) |> Enum.sort()
+
+    assert head_values == ["200", "z"]
   end
 
   test "respects an explicit --out path for the html and writes diff.json beside it" do

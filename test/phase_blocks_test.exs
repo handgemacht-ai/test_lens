@@ -8,7 +8,7 @@ defmodule TestLens.PhaseBlocksTest do
   use ExUnit.Case, async: false
   require TestLens
 
-  alias TestLens.{Recorder, Viewer}
+  alias TestLens.{Recorder, ViewerCase}
 
   defp begin(module, name) do
     Recorder.begin(%{
@@ -19,12 +19,6 @@ defmodule TestLens.PhaseBlocksTest do
       line: __ENV__.line,
       tags: []
     })
-  end
-
-  defp build_html do
-    dir = Application.get_env(:test_lens, :dir, "test_lens_out")
-    {:ok, html_path, _count} = Viewer.build(dir: dir)
-    File.read!(html_path)
   end
 
   test "each block files its source under its own channel and runs the code" do
@@ -72,11 +66,19 @@ defmodule TestLens.PhaseBlocksTest do
       _answer = 6 * 7
     end
 
-    assert {:ok, _path} = Recorder.finish(module, name, "passed", 500)
+    assert {:ok, path} = Recorder.finish(module, name, "passed", 500)
 
-    html = build_html()
-    assert String.contains?(html, "6 * 7"), "expected the copied action source in the HTML"
-    assert String.contains?(html, "compute the answer"), "expected the description in the HTML"
-    assert String.contains?(html, "phase-src"), "expected the source renderer in the viewer"
+    # Build against only this case: the copied source and the description must be
+    # in the payload the "source" renderer draws from. ("phase-src" is a CSS
+    # class + JS constant, present even in an empty viewer — asserting on it
+    # proved nothing about this test.)
+    html = ViewerCase.build_isolated([path])
+    assert [c] = ViewerCase.data_payload(html)
+    assert [source] = c["captures"]
+
+    assert source["kind"] == "source"
+    assert source["stage"] == "action"
+    assert source["label"] == "compute the answer"
+    assert String.contains?(source["value"], "6 * 7")
   end
 end
