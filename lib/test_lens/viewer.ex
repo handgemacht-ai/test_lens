@@ -46,6 +46,9 @@ defmodule TestLens.Viewer do
       |> String.replace("__SHARED_CSS__", TestLens.Assets.css())
       |> String.replace("__SHARED_JS__", TestLens.Assets.js())
       |> String.replace("__HLJS__", TestLens.Assets.hljs())
+      |> String.replace("__RUN_SUMMARY__", TestLens.Charts.run_summary(cases))
+      |> String.replace("__DURATION_CHART__", TestLens.Charts.durations(cases))
+      |> String.replace("__MODULE_CHART__", TestLens.Charts.modules(cases))
       |> String.replace("__SKIPPED__", Integer.to_string(skipped))
       |> String.replace("__CASES_JSON__", json)
 
@@ -187,7 +190,7 @@ defmodule TestLens.Viewer do
         margin: 0; background: var(--bg); color: var(--text);
         font: 13.5px/1.55 var(--mono);
         -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility;
-        display: grid; grid-template-rows: auto 1fr; grid-template-columns: minmax(0, 1fr); height: 100vh; overflow: hidden;
+        display: grid; grid-template-rows: auto auto 1fr; grid-template-columns: minmax(0, 1fr); height: 100vh; overflow: hidden;
       }
 
       /* ---------- instrument header ---------- */
@@ -220,6 +223,25 @@ defmodule TestLens.Viewer do
       .nums .nl { color: var(--faint); font-size: 11px; letter-spacing: .4px; margin-right: 4px; }
       .nums .sep { width: 1px; height: 13px; background: var(--line-2); margin: 0 4px; }
       .skipwarn { display: inline-flex; align-items: center; gap: 5px; color: var(--upd); font-size: 11px; letter-spacing: .3px; white-space: nowrap; }
+
+      /* run-summary chart: the always-on, zero-JS status readout in the header */
+      .run-chart { display: flex; align-items: center; flex: none; }
+
+      /* ---------- overview: collapsible static-SVG dashboards (native <details>) ---------- */
+      .overview { border-bottom: 1px solid var(--line); background: var(--bg-2); min-width: 0; }
+      .overview > summary {
+        list-style: none; cursor: pointer; user-select: none;
+        display: flex; align-items: center; gap: 9px; padding: 9px 22px;
+        color: var(--muted); font: 600 11px/1 var(--display); letter-spacing: 1px;
+      }
+      .overview > summary::-webkit-details-marker { display: none; }
+      .overview > summary:hover { color: var(--text); }
+      .ov-caret { color: var(--faint); display: inline-block; transition: transform .14s; }
+      .overview[open] > summary .ov-caret { transform: rotate(90deg); }
+      .overview[open] > summary { border-bottom: 1px solid var(--line); }
+      .overview-body { padding: 16px 22px 20px; display: flex; flex-direction: column; gap: 20px; max-height: 46vh; overflow: auto; }
+      .ov-panel { min-width: 0; overflow-x: auto; }
+      .ov-h { font: 600 10px/1 var(--display); letter-spacing: 1.4px; color: var(--faint); margin-bottom: 9px; text-transform: uppercase; }
 
       /* ---------- bench ---------- */
       .bench { display: grid; grid-template-columns: 372px minmax(0, 1fr); min-height: 0; min-width: 0; }
@@ -379,8 +401,17 @@ defmodule TestLens.Viewer do
     <body data-skipped="__SKIPPED__">
       <header class="bar">
         <div class="brand"><span class="mark" aria-hidden="true"></span><span class="word">TEST<i>&middot;</i>LENS</span></div>
+        <div class="run-chart">__RUN_SUMMARY__</div>
         <div class="readout" id="readout"></div>
       </header>
+
+      <details class="overview">
+        <summary><span class="ov-caret" aria-hidden="true">&#9656;</span> Overview</summary>
+        <div class="overview-body">
+          <div class="ov-panel"><div class="ov-h">Slowest tests</div>__DURATION_CHART__</div>
+          <div class="ov-panel"><div class="ov-h">By module</div>__MODULE_CHART__</div>
+        </div>
+      </details>
 
       <div class="bench">
         <aside class="tray">
