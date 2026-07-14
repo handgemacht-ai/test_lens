@@ -177,6 +177,36 @@ defmodule TestLens.Assets do
       .anno-line.miss .anno-val { color: var(--faint); font-style: italic; font-weight: 400; }
       .hl { border-radius: 3px; padding: 0 2px; background: rgba(244,183,64,.22); box-shadow: 0 0 0 1px rgba(244,183,64,.4); }
 
+      /* ---------- static SVG charts (server-rendered, zero-JS) ----------
+         Colours resolve against each report's :root palette, so the charts stay
+         theme-consistent with the surrounding instrument. */
+      .tl-chart { display: block; width: 100%; max-width: 760px; height: auto; }
+      .tl-track { fill: rgba(255,255,255,.05); }
+      .tl-bar.pass, .tl-seg-pass { fill: var(--pass); }
+      .tl-bar.fail, .tl-seg-fail { fill: var(--fail); }
+      .tl-bar.skip, .tl-seg-skip { fill: var(--skip); }
+      .tl-seg-add { fill: var(--pass); } .tl-seg-rem { fill: var(--fail); }
+      .tl-seg-flip { fill: var(--gold); } .tl-seg-chg { fill: var(--act); }
+      .tl-lbl { fill: var(--muted); font: 12px var(--mono); }
+      .tl-val, .tl-cnt, .tl-more { fill: var(--faint); font: 11px var(--mono); }
+      .tl-t-pass { fill: var(--pass); } .tl-t-fail { fill: var(--fail); } .tl-t-skip { fill: var(--skip); }
+      .tl-empty { color: var(--faint); font-style: italic; font-size: 12px; padding: 8px 2px; }
+
+      .tl-runsum { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; min-width: 0; }
+      .tl-bar-wrap { width: 120px; height: 8px; border-radius: 999px; overflow: hidden; flex: none;
+        background: rgba(255,255,255,.05); box-shadow: inset 0 0 0 1px var(--line); }
+      .tl-bar-wrap .tl-segbar { display: block; width: 100%; height: 100%; }
+      .tl-legend { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; font: 11px var(--mono); color: var(--muted); }
+      .tl-legend .k { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
+      .tl-legend .sw { width: 8px; height: 8px; border-radius: 2px; display: inline-block; flex: none; }
+      .tl-legend .sw.pass, .tl-legend .sw.add { background: var(--pass); }
+      .tl-legend .sw.fail, .tl-legend .sw.rem { background: var(--fail); }
+      .tl-legend .sw.skip { background: var(--skip); }
+      .tl-legend .sw.flip { background: var(--gold); }
+      .tl-legend .sw.chg { background: var(--act); }
+      .tl-legend .sw.unch { background: var(--faint); }
+      .tl-none-note { color: var(--faint); font-style: italic; }
+
       /* ---------- dolt_op capture ---------- */
       .dolt-op { border-radius: 10px; padding: 10px 13px; border: 1px solid rgba(130,100,220,.35); background: rgba(100,60,200,.07); min-width: 0; }
       .dolt-op-head { display: flex; align-items: center; gap: 9px; margin-bottom: 8px; flex-wrap: wrap; }
