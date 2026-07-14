@@ -49,6 +49,7 @@ defmodule TestLens.DiffViewer do
     |> String.replace("__SHARED_CSS__", TestLens.Assets.css())
     |> String.replace("__SHARED_JS__", TestLens.Assets.js())
     |> String.replace("__HLJS__", TestLens.Assets.hljs())
+    |> String.replace("__DIFF_SUMMARY__", TestLens.Charts.diff_summary(payload["counts"]))
     |> String.replace("__DIFF_JSON__", json)
   end
 
@@ -140,6 +141,12 @@ defmodule TestLens.DiffViewer do
       .chip.flip   { color: var(--flip); border-color: rgba(244,183,64,.35); }
       .chip.chg    { color: var(--chg); border-color: rgba(169,139,255,.35); }
       .chip.unch   { color: var(--faint); }
+
+      /* ---------- change-summary chart (static SVG, zero-JS) ---------- */
+      .diff-overview { max-width: 1180px; margin: 0 auto; padding: 16px 22px 0; }
+      .diff-overview .dov-inner { border: 1px solid var(--line); border-radius: 10px; background: var(--bg-2); padding: 12px 15px; }
+      .diff-overview .ov-h { font: 600 10px/1 var(--display); letter-spacing: 1.4px; color: var(--faint); margin-bottom: 10px; text-transform: uppercase; }
+      .tl-diffsum .tl-bar-wrap { width: 220px; height: 10px; }
 
       /* ---------- document ---------- */
       main { max-width: 1180px; margin: 0 auto; padding: 22px 22px 80px; }
@@ -249,6 +256,7 @@ defmodule TestLens.DiffViewer do
         <div class="compare" id="compare"></div>
         <div class="counts" id="counts"></div>
       </header>
+      <section class="diff-overview"><div class="dov-inner"><div class="ov-h">Change summary</div>__DIFF_SUMMARY__</div></section>
       <main id="main"></main>
 
       <script>__HLJS__</script>
