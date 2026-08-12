@@ -207,7 +207,8 @@ defmodule TestLens.Recorder do
       state = %{
         state
         | case_count: state.case_count + 1,
-          status_counts: Map.update(state.status_counts, to_string(status), 1, &(&1 + 1))
+          status_counts:
+            Map.update(state.status_counts, TestLens.Status.to_string(status), 1, &(&1 + 1))
       }
 
       {:reply, {:ok, path}, state}
@@ -262,7 +263,7 @@ defmodule TestLens.Recorder do
       name: acc.name,
       file: acc.file,
       line: acc.line,
-      status: status,
+      status: TestLens.Status.to_string(status),
       tags: acc.tags,
       duration_us: duration_us,
       captures: acc.captures |> Enum.reverse() |> Enum.map(&encode_capture/1),

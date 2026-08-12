@@ -205,7 +205,7 @@ defmodule TestLens.Charts do
     baseline = y + 17
     bar_y = y + 7
     bar_w = c["duration_us"] / maxd * @dur_bar_w
-    k = kind(c["status"])
+    k = TestLens.Status.css_class(c["status"])
     name = to_string(c["name"] || "")
     dur = ms(c["duration_us"])
     full = "#{c["module"]} › #{name} · #{dur}"
@@ -299,17 +299,13 @@ defmodule TestLens.Charts do
 
   defp tally(cases) do
     Enum.reduce(cases, {0, 0, 0}, fn c, {pass, fail, skip} ->
-      case kind(c["status"]) do
+      case TestLens.Status.css_class(c["status"]) do
         :pass -> {pass + 1, fail, skip}
         :skip -> {pass, fail, skip + 1}
         :fail -> {pass, fail + 1, skip}
       end
     end)
   end
-
-  defp kind("passed"), do: :pass
-  defp kind(s) when s in ["skipped", "excluded"], do: :skip
-  defp kind(_), do: :fail
 
   defp count(counts, key) when is_map(counts) do
     case Map.get(counts, key, 0) do

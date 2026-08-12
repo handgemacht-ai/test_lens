@@ -222,10 +222,12 @@ defmodule TestLens.Diff do
   defp status_counts(cases) do
     cases
     |> Map.values()
-    |> Enum.reduce(%{}, fn c, acc -> Map.update(acc, status(c), 1, &(&1 + 1)) end)
+    |> Enum.reduce(%{}, fn c, acc ->
+      Map.update(acc, status(c), 1, &(&1 + 1))
+    end)
   end
 
-  defp status(c), do: to_string(c["status"])
+  defp status(c), do: TestLens.Status.to_string(c["status"])
 
   # Comparison-stable content: the captured input/action/result, with the
   # per-run global ordering key (`seq`) dropped so the same test compares equal
@@ -286,7 +288,7 @@ defmodule TestLens.Diff do
       "id" => identity(c),
       "module" => c["module"],
       "name" => c["name"],
-      "status" => c["status"],
+      "status" => TestLens.Status.to_string(c["status"]),
       "file" => c["file"],
       "line" => c["line"]
     }
@@ -297,8 +299,8 @@ defmodule TestLens.Diff do
       "id" => identity(h),
       "module" => h["module"],
       "name" => h["name"],
-      "base_status" => b["status"],
-      "head_status" => h["status"],
+      "base_status" => TestLens.Status.to_string(b["status"]),
+      "head_status" => TestLens.Status.to_string(h["status"]),
       "file" => h["file"],
       "line" => h["line"]
     }
@@ -309,7 +311,7 @@ defmodule TestLens.Diff do
       "id" => identity(h),
       "module" => h["module"],
       "name" => h["name"],
-      "status" => h["status"],
+      "status" => TestLens.Status.to_string(h["status"]),
       "summary" => s
     }
   end

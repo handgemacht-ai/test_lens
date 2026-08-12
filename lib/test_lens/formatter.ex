@@ -9,13 +9,14 @@ defmodule TestLens.Formatter do
   use GenServer
 
   alias TestLens.Recorder
+  alias TestLens.Status
 
   @impl true
   def init(_opts), do: {:ok, %{}}
 
   @impl true
   def handle_cast({:test_finished, test}, state) do
-    Recorder.finish(test.module, test.name, status(test.state), test.time, meta(test))
+    Recorder.finish(test.module, test.name, Status.from_exunit(test.state), test.time, meta(test))
     {:noreply, state}
   end
 
@@ -42,11 +43,4 @@ defmodule TestLens.Formatter do
       tags: tags |> Map.get(:registered, %{}) |> Map.keys() |> Enum.map(&to_string/1)
     }
   end
-
-  defp status(nil), do: "passed"
-  defp status({:failed, _}), do: "failed"
-  defp status({:skipped, _}), do: "skipped"
-  defp status({:excluded, _}), do: "excluded"
-  defp status({:invalid, _}), do: "invalid"
-  defp status(_), do: "unknown"
 end

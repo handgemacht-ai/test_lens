@@ -240,6 +240,10 @@ defmodule TestLens.Assets do
       const escA = s => esc(s).replace(/"/g, '&quot;');
       // highlight.js escapes & < > " ' internally; match it when we splice into its output.
       const escHljs = s => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#x27;'}[c]));
+      // Collapses a case status to the pass/skip/fail CSS class. Pinned 1:1 to
+      // TestLens.Status.css_class/1 (Elixir): every status string that module
+      // emits resolves to the same class name here, so the server-rendered charts
+      // and this client renderer never disagree.
       const kind = s => s === "passed" ? "pass" : (s === "skipped" || s === "excluded") ? "skip" : "fail";
 
       /* ---------- syntax highlighting (highlight.js, XSS-safe) ----------

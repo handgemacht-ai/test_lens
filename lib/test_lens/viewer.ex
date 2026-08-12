@@ -100,8 +100,15 @@ defmodule TestLens.Viewer do
     {run_cases, run_skipped} = read_cases(run_paths)
     {legacy_cases, legacy_skipped} = read_cases(legacy_paths)
 
-    {dedupe(run_cases ++ legacy_cases), run_skipped + legacy_skipped}
+    {dedupe(run_cases ++ legacy_cases) |> Enum.map(&lift_status/1), run_skipped + legacy_skipped}
   end
+
+  # Lift the on-disk status string to `TestLens.Status.t()` once at the read
+  # boundary, so the render path (charts, the embedded JSON) carries the typed
+  # enum instead of re-deriving it downstream. The on-disk JSON itself is
+  # unchanged; `Jason` encodes the atom back to the same string.
+  defp lift_status(%{"status" => s} = c), do: %{c | "status" => TestLens.Status.from_string(s)}
+  defp lift_status(c), do: c
 
   # The two case sources for this build, as `{run_paths, legacy_paths}` (see
   # `SPEC.md` §6). Legacy flat cases are only merged for a workspace-root build.
