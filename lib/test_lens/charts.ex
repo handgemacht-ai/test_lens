@@ -207,7 +207,7 @@ defmodule TestLens.Charts do
     bar_w = c["duration_us"] / maxd * @dur_bar_w
     k = TestLens.Status.css_class(c["status"])
     name = to_string(c["name"] || "")
-    dur = ms(c["duration_us"])
+    dur = TestLens.Duration.to_string(c["duration_us"])
     full = "#{c["module"]} › #{name} · #{dur}"
 
     ~s(<g><title>#{esc(full)}</title>) <>
@@ -315,8 +315,6 @@ defmodule TestLens.Charts do
   end
 
   defp count(_counts, _key), do: 0
-
-  defp ms(us), do: :erlang.float_to_binary(us / 1000, decimals: 1) <> "ms"
 
   defp truncate(s, max) do
     if String.length(s) > max, do: String.slice(s, 0, max - 1) <> "…", else: s

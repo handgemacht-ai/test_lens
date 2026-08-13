@@ -301,7 +301,7 @@ defmodule TestLens.DiffViewer do
       }
       function sideHtml(label, c) {
         const where = c.file ? esc(c.file) + (c.line ? ":" + esc(String(c.line)) : "") : "";
-        const dur = c.duration_us != null ? (c.duration_us / 1000).toFixed(1) + "ms" : "";
+        const dur = formatMs(c.duration_us);
         const meta = [where, dur].filter(Boolean).join(" · ");
         return `<div class="side"><div class="side-h"><span class="slabel">${label}</span>` +
           `<span class="st ${kind(c.status)}">${esc(c.status)}</span>` +

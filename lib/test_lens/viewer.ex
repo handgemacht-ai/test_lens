@@ -449,7 +449,6 @@ defmodule TestLens.Viewer do
       CASES.forEach((c, i) => {
         c._id = i;
         c._dbn = (c.db_events || []).length;
-        c._dur = c.duration_us != null ? c.duration_us / 1000 : null;
       });
 
       let search = "", statusF = "all", projF = "all", groupBy = true;
@@ -564,7 +563,7 @@ defmodule TestLens.Viewer do
         return `<button class="row test${r.id === selectedId ? " sel" : ""}" data-id="${r.id}">` +
           `<span class="g ${k}"></span>` +
           `<span class="rn" title="${escA(c.name)}">${mod}${esc(c.name)}</span>` +
-          `<span class="rmeta">${shape(c)}${c._dur != null ? `<span class="dur">${c._dur.toFixed(1)}ms</span>` : ""}${c._dbn ? `<span class="dbt">&#43;${c._dbn}</span>` : ""}</span>` +
+          `<span class="rmeta">${shape(c)}${c.duration_us != null ? `<span class="dur">${formatMs(c.duration_us)}</span>` : ""}${c._dbn ? `<span class="dbt">&#43;${c._dbn}</span>` : ""}</span>` +
         `</button>`;
       }
 
@@ -613,7 +612,7 @@ defmodule TestLens.Viewer do
               `<div class="spec-id"><div class="spec-name">${esc(c.name)}</div>` +
                 `<div class="spec-sub"><span class="mono">${esc(c.module)}</span>` +
                   `<span class="dim">${c.file ? ` &middot; ${esc(c.file)}${c.line ? ":" + esc(String(c.line)) : ""}` : ""}</span>` +
-                  `${c._dur != null ? ` &middot; ${c._dur.toFixed(1)}ms` : ""} &middot; <span class="st ${kind(c.status)}">${esc(c.status)}</span></div>` +
+                  `${c.duration_us != null ? ` &middot; ${formatMs(c.duration_us)}` : ""} &middot; <span class="st ${kind(c.status)}">${esc(c.status)}</span></div>` +
               `</div>` +
               `<div class="spec-side">${tags}${c.project ? `<span class="tag proj">${esc(c.project)}</span>` : ""}</div>` +
             `</div>` +

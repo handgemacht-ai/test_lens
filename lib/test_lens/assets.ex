@@ -245,6 +245,11 @@ defmodule TestLens.Assets do
       // emits resolves to the same class name here, so the server-rendered charts
       // and this client renderer never disagree.
       const kind = s => s === "passed" ? "pass" : (s === "skipped" || s === "excluded") ? "skip" : "fail";
+      // Microseconds → milliseconds display string. Pinned 1:1 to
+      // TestLens.Duration.to_string/1 (Elixir): the server-rendered charts and
+      // this client renderer format the same `duration_us` integer identically.
+      // A null/missing duration returns "" so a timing-less case renders blank.
+      const formatMs = us => (us != null && isFinite(us)) ? (us / 1000).toFixed(1) + "ms" : "";
 
       /* ---------- syntax highlighting (highlight.js, XSS-safe) ----------
          Every helper hands hljs the PLAIN value; hljs escapes it and emits only
