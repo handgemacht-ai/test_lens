@@ -115,9 +115,32 @@ defmodule TestLens do
   `kind` controls how the viewer renders it: `:json`, `:text`, `:table`,
   `:http_request`, `:http_response`. Auto-detected from the value when omitted.
 
-  `annotate` takes a list of paths to highlight on render; each path is a list
-  of keys (atoms or strings) and/or integer indices resolved against the
-  sanitized value, e.g. `annotate: [["data", "creator"]]`.
+  `annotate` takes a list of path entries to highlight on render. Each entry is
+  either a plain path or an explicit-intent map/keyword list:
+
+      # plain path — spotlight the value the test is about (default `:present`)
+      annotate: [["data", "creator"]]
+
+      # explicit intent — a claim about presence/absence the viewer grades
+      annotate: [%{path: ["data", "id"], expect: :present},
+                 %{path: ["data", "error"], expect: :absent},
+                 %{path: ["data", "items"], expect: :non_empty}]
+
+  A path is a list of keys (atoms or strings) and/or integer indices resolved
+  against the sanitized value. `expect` is one of:
+
+    * `:present` (default) — the path resolves to *something*. A miss renders
+      the neutral "annotation matched no value" drift marker.
+    * `:absent` — the path must NOT resolve. A miss renders a green "absent ✓"
+      readout; an unexpected hit renders a red "expected absent" failure.
+    * `:non_empty` — the path must resolve to a non-empty value (so `[]`, `{}`,
+      `""`, `null` count as empty). A hit renders gold; empty/absent renders a
+      red "expected non-empty" failure.
+
+  Record everything; annotate **what matters** — and what matters may be an
+  absence (a field that stayed empty, an error that never fired). An annotation
+  with an `expect:` is the author telling the viewer what the test claims is
+  true of the subject, so a reader can eyeball the claim's verdict at a glance.
   """
   def capture(label, value, opts \\ []) do
     kind = opts[:kind] || detect_kind(value)

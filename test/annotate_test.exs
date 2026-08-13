@@ -223,4 +223,231 @@ defmodule TestLens.AnnotateTest do
       TestLens.capture("miss-annotated capture in payload", embedded, annotate: [["paths"]])
     end
   end
+
+  test "expect: :absent on a missing path writes the object form and renders an ok verdict" do
+    module = TestLens.AnnotateTest.AbsentOk
+    name = :"test expect absent resolves to nothing"
+
+    TestLens.setup "a response whose real subject is the error that must NOT be there" do
+      response = %{data: %{id: 7}}
+      # The error channel must stay empty; spotlight the absence so the viewer
+      # grades the claim green when it is indeed absent.
+      annotate = [%{path: ["data", "error"], expect: :absent}]
+      TestLens.capture("response under test", response, annotate: annotate)
+    end
+
+    TestLens.action "record the absent-claim capture, flush the case, rebuild the viewer" do
+      {:ok, path} =
+        record_off_pid(module, name, "passed", 1_000, fn ->
+          Recorder.put_stage(self(), "verify")
+
+          TestLens.capture("response", response,
+            stage: "verify",
+            annotate: [%{path: ["data", "error"], expect: :absent}]
+          )
+        end)
+
+      case_data = path |> File.read!() |> Jason.decode!()
+      html = ViewerCase.build_isolated([path])
+    end
+
+    TestLens.verify "the on-disk + embedded path is the object form and the JS ships the ok branch" do
+      [cap] = case_data["captures"]
+      assert cap["paths"] == [%{"path" => ["data", "error"], "expect" => "absent"}]
+
+      assert [c] = ViewerCase.data_payload(html)
+      assert [embedded] = c["captures"]
+      assert embedded["paths"] == [%{"path" => ["data", "error"], "expect" => "absent"}]
+      refute Map.has_key?(embedded["value"]["data"], "error")
+
+      # The embedded JSON carries the object form (decoded above) so the client
+      # renders it; the shared JS ships the ok verdict branch for an absent claim
+      # that holds.
+      assert html =~ "absent &#10003;"
+
+      TestLens.capture("viewer-embedded absent-claim", embedded, annotate: [["paths"]])
+    end
+  end
+
+  test "expect: :absent on a present path renders a red expected-absent failure" do
+    module = TestLens.AnnotateTest.AbsentFail
+    name = :"test expect absent but value is present"
+
+    TestLens.setup "a response whose error channel is unexpectedly populated" do
+      response = %{data: %{id: 7}, error: "boom"}
+      annotate = [%{path: ["error"], expect: :absent}]
+      TestLens.capture("response under test", response, annotate: annotate)
+    end
+
+    TestLens.action "record the broken absent-claim, flush the case, rebuild the viewer" do
+      {:ok, path} =
+        record_off_pid(module, name, "passed", 1_000, fn ->
+          Recorder.put_stage(self(), "verify")
+          TestLens.capture("response", response, stage: "verify", annotate: annotate)
+        end)
+
+      case_data = path |> File.read!() |> Jason.decode!()
+      html = ViewerCase.build_isolated([path])
+    end
+
+    TestLens.verify "the embedded path carries the absent intent over a present value; the JS ships the fail branch" do
+      [cap] = case_data["captures"]
+      assert cap["paths"] == [%{"path" => ["error"], "expect" => "absent"}]
+      assert cap["value"]["error"] == "boom"
+
+      assert [c] = ViewerCase.data_payload(html)
+      assert [embedded] = c["captures"]
+      assert embedded["value"]["error"] == "boom"
+      assert html =~ "expected absent"
+
+      TestLens.capture("absent-fail embedded", embedded,
+        annotate: [["paths", 0, "expect"], ["value", "error"]]
+      )
+    end
+  end
+
+  test "expect: :non_empty on an empty collection renders a red expected-non-empty failure" do
+    module = TestLens.AnnotateTest.NonEmptyFail
+    name = :"test expect non-empty but value is []"
+
+    TestLens.setup "a response whose items list stayed empty" do
+      response = %{data: %{items: []}}
+      annotate = [%{path: ["data", "items"], expect: :non_empty}]
+      TestLens.capture("response under test", response, annotate: annotate)
+    end
+
+    TestLens.action "record the empty collection, flush the case, rebuild the viewer" do
+      {:ok, path} =
+        record_off_pid(module, name, "passed", 1_000, fn ->
+          Recorder.put_stage(self(), "verify")
+          TestLens.capture("response", response, stage: "verify", annotate: annotate)
+        end)
+
+      case_data = path |> File.read!() |> Jason.decode!()
+      html = ViewerCase.build_isolated([path])
+    end
+
+    TestLens.verify "the embedded path carries non_empty intent over an empty value; the JS ships the fail branch" do
+      [cap] = case_data["captures"]
+      assert cap["paths"] == [%{"path" => ["data", "items"], "expect" => "non_empty"}]
+      assert cap["value"]["data"]["items"] == []
+
+      assert [c] = ViewerCase.data_payload(html)
+      assert [embedded] = c["captures"]
+      assert embedded["value"]["data"]["items"] == []
+      assert html =~ "expected non-empty"
+
+      TestLens.capture("non-empty fail embedded", embedded, annotate: [["paths", 0, "expect"]])
+    end
+  end
+
+  test "expect: :non_empty on a populated collection renders the gold value" do
+    module = TestLens.AnnotateTest.NonEmptyOk
+    name = :"test expect non-empty and value is populated"
+
+    TestLens.setup "a response whose items list is populated" do
+      response = %{data: %{items: [1, 2, 3]}}
+      annotate = [%{path: ["data", "items"], expect: :non_empty}]
+      TestLens.capture("response under test", response, annotate: annotate)
+    end
+
+    TestLens.action "record the populated collection, flush the case, rebuild the viewer" do
+      {:ok, path} =
+        record_off_pid(module, name, "passed", 1_000, fn ->
+          Recorder.put_stage(self(), "verify")
+          TestLens.capture("response", response, stage: "verify", annotate: annotate)
+        end)
+
+      case_data = path |> File.read!() |> Jason.decode!()
+      html = ViewerCase.build_isolated([path])
+    end
+
+    TestLens.verify "the embedded path carries non_empty intent over a populated value" do
+      [cap] = case_data["captures"]
+      assert cap["paths"] == [%{"path" => ["data", "items"], "expect" => "non_empty"}]
+      assert cap["value"]["data"]["items"] == [1, 2, 3]
+
+      assert [c] = ViewerCase.data_payload(html)
+      assert [embedded] = c["captures"]
+      assert embedded["value"]["data"]["items"] == [1, 2, 3]
+      assert html =~ "expected non-empty"
+
+      TestLens.capture("non-empty ok embedded", embedded,
+        annotate: [["paths", 0, "expect"], ["value", "data", "items"]]
+      )
+    end
+  end
+
+  test "expect: :absent on a present-but-null value treats the empty value as absent" do
+    module = TestLens.AnnotateTest.AbsentNull
+    name = :"test expect absent with error nil"
+
+    TestLens.setup "a response whose error channel is present but null (empty)" do
+      response = %{data: %{id: 7}, error: nil}
+      annotate = [%{path: ["error"], expect: :absent}]
+      TestLens.capture("response under test", response, annotate: annotate)
+    end
+
+    TestLens.action "record the null-error capture, flush the case, rebuild the viewer" do
+      {:ok, path} =
+        record_off_pid(module, name, "passed", 1_000, fn ->
+          Recorder.put_stage(self(), "verify")
+          TestLens.capture("response", response, stage: "verify", annotate: annotate)
+        end)
+
+      case_data = path |> File.read!() |> Jason.decode!()
+      html = ViewerCase.build_isolated([path])
+    end
+
+    TestLens.verify "the null value counts as absent: ok verdict, not a failure" do
+      [cap] = case_data["captures"]
+      assert cap["paths"] == [%{"path" => ["error"], "expect" => "absent"}]
+      assert cap["value"]["error"] == nil
+
+      assert [c] = ViewerCase.data_payload(html)
+      assert [embedded] = c["captures"]
+      assert embedded["value"]["error"] == nil
+      # the JS ships the ok verdict branch (the per-case rendering verdict is
+      # exercised by the node harness; ExUnit sees the data the client renders from)
+      assert html =~ "absent &#10003;"
+
+      TestLens.capture("absent-null embedded", embedded,
+        annotate: [["paths", 0, "expect"], ["value", "error"]]
+      )
+    end
+  end
+
+  test "the keyword-list form of an intent path writes the same object as the map form" do
+    module = TestLens.AnnotateTest.KeywordForm
+    name = :"test keyword-list intent entry"
+
+    TestLens.setup "an intent path written as a keyword list" do
+      response = %{ok: true}
+      annotate = [[path: ["missing"], expect: :absent]]
+      TestLens.capture("response under test", response, annotate: annotate)
+    end
+
+    TestLens.action "record the keyword-form intent, flush the case" do
+      {:ok, path} =
+        record_off_pid(module, name, "passed", 1_000, fn ->
+          Recorder.put_stage(self(), "verify")
+
+          TestLens.capture("response", response,
+            stage: "verify",
+            annotate: [[path: ["missing"], expect: :absent]]
+          )
+        end)
+
+      case_data = path |> File.read!() |> Jason.decode!()
+    end
+
+    TestLens.verify "the on-disk object matches the map form byte-for-byte" do
+      [cap] = case_data["captures"]
+      assert cap["paths"] == [%{"path" => ["missing"], "expect" => "absent"}]
+
+      TestLens.capture("keyword-form on-disk object", hd(case_data["captures"]),
+        annotate: [["paths", 0, "expect"]]
+      )
+    end
+  end
 end

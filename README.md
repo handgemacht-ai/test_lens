@@ -104,6 +104,42 @@ TestLens.capture("response", response.body,
 Annotation is purely descriptive: it never changes what is recorded or whether
 the test passes. It only changes what the viewer draws your eye to.
 
+### Annotating what is NOT there (presence / absence intent)
+
+What a test is really about is often an **absence** — the error that must not
+fire, the list that should stay empty, the field that should not be populated.
+A plain spotlight can only point at a value that exists; it cannot express
+"this should be empty and it is." So a path entry may carry an `expect:` to turn
+the annotation into a claim the viewer **grades**:
+
+```elixir
+TestLens.capture("response", response.body,
+  annotate: [
+    %{path: ["data", "id"], expect: :present},      # the subject under test
+    %{path: ["error"],      expect: :absent},         # the error that must NOT be there
+    %{path: ["data", "items"], expect: :non_empty}   # the list that must stay populated
+  ]
+)
+```
+
+`expect` is one of:
+
+- `:present` (default) — the path resolves to *something*. A miss renders the
+  neutral "annotation matched no value" drift marker (the shape moved).
+- `:absent` — the path must NOT resolve. A miss renders a green **"absent ✓"**
+  readout (the claim holds); an unexpected hit renders a red **"expected absent"**
+  failure (something is there that should not be).
+- `:non_empty` — the path must resolve to a non-empty value (`[]`, `{}`, `""`,
+  `null` all count as empty). A populated hit renders gold; an empty or absent
+  value renders a red **"expected non-empty"** failure — the field that stayed
+  empty when it should not have.
+
+A plain path `["data", "creator"]` is shorthand for `%{path: ["data", "creator"]}`
+(defaults to `:present`), so existing annotations keep working unchanged. The
+intent form is how you tell the viewer what the test *claims* is true of the
+subject — including that something should be empty — so a reader can eyeball the
+claim's verdict at a glance.
+
 ## Capturing database changes (optional)
 
 For projects on a clean Ecto repo, attach the database-delta layer once in

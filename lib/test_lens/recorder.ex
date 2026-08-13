@@ -368,11 +368,75 @@ defmodule TestLens.Recorder do
     :ok
   end
 
-  defp sanitize_paths(paths) when is_list(paths) do
-    Enum.map(paths, fn path -> Enum.map(List.wrap(path), &path_key/1) end)
+  # `paths` is a list of path entries. Each entry is one of:
+  #
+  #   * a plain path — a list of keys/indices, e.g. `["data", "creator"]`, or a
+  #     bare key `:foo` (short for `[:foo]`). Defaults to `expect: :present` — the
+  #     legacy spotlight: "this value is the subject under test".
+  #   * a map or keyword list with a `:path` key and an optional `:expect`, e.g.
+  #     `%{path: ["data", "error"], expect: :absent}`. `expect` is one of
+  #     `:present` (default), `:absent` (the value must NOT be there), or
+  #     `:non_empty` (the value must resolve to a non-empty scalar/collection).
+  #     See `TestLens.capture/3` — an annotation with an expectation is a claim
+  #     about presence/absence that the viewer grades, not just a spotlight.
+  #
+  # On-disk form: a plain path stays a plain array (back-compatible with the
+  # `test_lens/v1.1` `paths` field); an expectation other than `:present` is
+  # written as `{"path": [...], "expect": "..."}`. Older readers that `List.wrap`
+  # a plain entry are unaffected; an object entry they do not understand is
+  # ignored harmlessly.
+  defp sanitize_paths(paths) when is_list(paths), do: Enum.map(paths, &normalize_path_entry/1)
+  defp sanitize_paths(_), do: []
+
+  defp normalize_path_entry(entry) when is_map(entry) do
+    build_path_entry(Map.get(entry, :path) || Map.get(entry, "path"), expect_opt(entry))
   end
 
-  defp sanitize_paths(_), do: []
+  defp normalize_path_entry(entry) when is_list(entry) do
+    if keywordish?(entry) do
+      normalize_path_entry(Map.new(entry))
+    else
+      build_path_entry(entry, :present)
+    end
+  end
+
+  defp normalize_path_entry(entry), do: build_path_entry([entry], :present)
+
+  defp build_path_entry(path, expect) when is_list(path) do
+    keys = Enum.map(path, &path_key/1)
+
+    case expect do
+      :present -> keys
+      other -> %{"path" => keys, "expect" => to_string(other)}
+    end
+  end
+
+  defp build_path_entry(_path, _expect), do: []
+
+  defp expect_opt(entry) do
+    case Map.get(entry, :expect) || Map.get(entry, "expect") do
+      nil -> :present
+      :present -> :present
+      :absent -> :absent
+      :non_empty -> :non_empty
+      other when other in ~w(present absent non_empty) -> String.to_atom(other)
+      _ -> :present
+    end
+  end
+
+  # A keyword list: every element is a 2-tuple whose first item is an atom. A
+  # plain path (list of keys/indices) has atom/string/integer elements, never
+  # tuples, so the two shapes are unambiguous.
+  defp keywordish?([]), do: false
+
+  defp keywordish?(list) when is_list(list) do
+    Enum.all?(list, fn
+      {k, _} when is_atom(k) -> true
+      _ -> false
+    end)
+  end
+
+  defp keywordish?(_), do: false
 
   defp path_key(k) when is_integer(k), do: k
   defp path_key(k) when is_atom(k), do: Atom.to_string(k)

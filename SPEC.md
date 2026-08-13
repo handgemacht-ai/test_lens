@@ -148,6 +148,29 @@ Pre-existing fields are unchanged: `schema`, `project`, `module`, `name`, `file`
 `line`, `status`, `tags`, `duration_us`, `captures`, `db_events`. (`duration_us`
 is elapsed test time, not wall-clock — wall-clock is `run_at`.)
 
+### 5.1 `paths` element shape (within a capture)
+
+Each capture's optional `paths` array lists the annotations the author drew on
+its value. The array is omitted when empty. Each element is one of two shapes
+(both render under `test_lens/v1.1`):
+
+* a **plain path** — an array of keys/indices, e.g. `["data", "creator"]`.
+  Defaults to `expect: "present"` (the legacy spotlight). This is the only
+  shape older writers produce, and older readers that `List.wrap` a path entry
+  are unaffected by the object form below (they ignore an entry they do not
+  understand).
+* an **intent object** — `{"path": [...], "expect": "present"|"absent"|"non_empty"}`,
+  written only when the author expressed an expectation. `expect` is additive:
+  readers that do not understand it fall back to `"present"` semantics for the
+  `path` it carries.
+
+`expect` values: `"present"` (default; miss renders the neutral "annotation
+matched no value" drift marker), `"absent"` (miss renders a green "absent ✓"
+verdict; hit renders a red "expected absent" failure), `"non_empty"` (a
+non-empty hit renders gold; an empty or absent value renders a red "expected
+non-empty" failure). The intent form lets an author annotate what is NOT visible
+— a field that should stay empty — as a first-class claim the viewer grades.
+
 ## 6. Building the viewer
 
 `TestLens.Viewer.build(opts)` returns `{:ok, out_path, case_count}` and resolves

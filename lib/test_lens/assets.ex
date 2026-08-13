@@ -175,7 +175,13 @@ defmodule TestLens.Assets do
       .anno-val { color: var(--text); font-weight: 600; min-width: 0; overflow-wrap: anywhere; }
       .anno-line.miss { color: var(--muted); background: var(--panel-2); border-color: var(--line); box-shadow: none; }
       .anno-line.miss .anno-val { color: var(--faint); font-style: italic; font-weight: 400; }
+      .anno-line.ok { color: #6ad08a; background: rgba(106,208,138,.10); border-color: rgba(106,208,138,.30); box-shadow: 0 0 10px rgba(106,208,138,.10); }
+      .anno-line.ok .anno-val { color: #6ad08a; }
+      .anno-line.fail { color: #e0716e; background: rgba(224,113,110,.10); border-color: rgba(224,113,110,.32); box-shadow: 0 0 10px rgba(224,113,110,.10); }
+      .anno-line.fail .anno-val, .anno-line.fail .anno-eq { color: #e0716e; }
+      .anno-line .anno-val i { font-style: italic; font-weight: 400; opacity: .82; }
       .hl { border-radius: 3px; padding: 0 2px; background: rgba(244,183,64,.22); box-shadow: 0 0 0 1px rgba(244,183,64,.4); }
+      .hl-fail { border-radius: 3px; padding: 0 2px; background: rgba(224,113,110,.22); box-shadow: 0 0 0 1px rgba(224,113,110,.4); }
 
       /* ---------- static SVG charts (server-rendered, zero-JS) ----------
          Colours resolve against each report's :root palette, so the charts stay
@@ -361,34 +367,86 @@ defmodule TestLens.Assets do
         return cur;
       }
       function pathLabel(path) { return path.map(k => String(k)).join("."); }
+      // A path entry is either a plain array (legacy, expect "present") or an
+      // object { path, expect } where expect is "present"|"absent"|"non_empty".
+      function normPath(p) {
+        if (Array.isArray(p)) return { path: p, expect: "present" };
+        return { path: p.path, expect: p.expect || "present" };
+      }
+      function isEmptyVal(v) {
+        return v == null || v === "" ||
+          (Array.isArray(v) && v.length === 0) ||
+          (typeof v === "object" && Object.keys(v).length === 0);
+      }
+      function showVal(v) {
+        return typeof v === "object" && v !== null ? JSON.stringify(v) : String(v);
+      }
+      function annoLine(cls, path, eq, valHtml) {
+        return `<div class="anno-line ${cls}"><span class="anno-path">${esc(pathLabel(path))}</span>` +
+          `${eq}<span class="anno-val">${valHtml}</span></div>`;
+      }
       function annoHtml(it) {
         if (!it.paths || !it.paths.length) return "";
-        const lines = it.paths.map(path => {
+        const lines = it.paths.map(raw => {
+          const { path, expect } = normPath(raw);
           const resolved = resolvePath(it.value, path);
-          if (resolved === PATH_MISS) {
-            return `<div class="anno-line miss"><span class="anno-path">${esc(pathLabel(path))}</span>` +
-              `<span class="anno-val">annotation matched no value</span></div>`;
+          const present = resolved !== PATH_MISS;
+          const empty = isEmptyVal(resolved);
+          if (expect === "absent") {
+            // absent means "not there OR empty" (null/[]/{} /"") — the error that
+            // never fired, the list that stayed empty. A present non-empty value
+            // is the only failure.
+            if (!present) return annoLine("ok", path, "", "absent &#10003;");
+            if (empty) return annoLine("ok", path, `<span class="anno-eq">=</span>`, esc(showVal(resolved)) + " <i>absent &#10003;</i>");
+            return annoLine("fail", path, `<span class="anno-eq">=</span>`, esc(showVal(resolved)) + " <i>expected absent</i>");
           }
-          const shown = typeof resolved === "object" ? JSON.stringify(resolved) : String(resolved);
-          return `<div class="anno-line"><span class="anno-path">${esc(pathLabel(path))}</span>` +
-            `<span class="anno-eq">=</span><span class="anno-val">${esc(shown)}</span></div>`;
+          if (expect === "non_empty") {
+            if (present && !empty) return annoLine("", path, `<span class="anno-eq">=</span>`, esc(showVal(resolved)));
+            if (!present) return annoLine("fail", path, "", "expected non-empty <i>(absent)</i>");
+            return annoLine("fail", path, `<span class="anno-eq">=</span>`, esc(showVal(resolved)) + " <i>expected non-empty</i>");
+          }
+          // present (default / legacy spotlight)
+          if (!present) return annoLine("miss", path, "", "annotation matched no value");
+          return annoLine("", path, `<span class="anno-eq">=</span>`, esc(showVal(resolved)));
         }).join("");
         return `<div class="anno">${lines}</div>`;
       }
       // Highlight the matched leaf keys of each annotation path inside the JSON.
-      // hljs renders a JSON key as <span class="hljs-attr">&quot;key&quot;</span>.
+      // Gold for present / non-empty successes; red for failures (absent-but-present,
+      // non-empty-but-empty) so the eye lands on the broken claim.
       function jsonHtmlHighlighted(value, paths) {
-        const keys = new Set();
-        (paths || []).forEach(path => {
+        const goldKeys = new Set();
+        const failKeys = new Set();
+        (paths || []).forEach(raw => {
+          const { path, expect } = normPath(raw);
           if (!path.length) return;
-          if (resolvePath(value, path) === PATH_MISS) return;
+          const resolved = resolvePath(value, path);
+          const present = resolved !== PATH_MISS;
+          const empty = isEmptyVal(resolved);
+          let gold = false, fail = false;
+          if (expect === "absent") {
+            if (!present) { /* no leaf to highlight */ }
+            else if (empty) { gold = true; }   // the empty value is the finding
+            else { fail = true; }              // present non-empty -> broken claim
+          } else if (expect === "non_empty") {
+            if (present && !empty) { gold = true; }
+            else if (present) { fail = true; } // present but empty -> broken
+            // absent -> no leaf
+          } else { // present (default)
+            if (present) gold = true;
+          }
+          if (!(gold || fail)) return;
           const last = path[path.length - 1];
-          if (typeof last !== "number") keys.add(String(last));
+          if (typeof last !== "number") (fail ? failKeys : goldKeys).add(String(last));
         });
         let html = jsonHtml(value);
-        keys.forEach(k => {
+        goldKeys.forEach(k => {
           const needle = `<span class="hljs-attr">&quot;${escHljs(k)}&quot;</span>`;
           html = html.split(needle).join(`<span class="hl">${needle}</span>`);
+        });
+        failKeys.forEach(k => {
+          const needle = `<span class="hljs-attr">&quot;${escHljs(k)}&quot;</span>`;
+          html = html.split(needle).join(`<span class="hl-fail">${needle}</span>`);
         });
         return html;
       }
