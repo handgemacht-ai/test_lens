@@ -184,7 +184,7 @@ defmodule TestLens.Diff do
 
   @doc "Stable cross-run identity of a case: `module <> \"::\" <> name`."
   @spec identity(map()) :: String.t()
-  def identity(c), do: to_string(c["module"]) <> "::" <> to_string(c["name"])
+  def identity(c), do: c |> TestLens.CaseId.from_case() |> TestLens.CaseId.to_string()
 
   @doc """
   Lenient JSON read: returns the decoded term, or `nil` when the path is not a

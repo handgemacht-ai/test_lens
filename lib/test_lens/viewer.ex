@@ -146,15 +146,17 @@ defmodule TestLens.Viewer do
 
   # De-duplicate by stable test identity, keeping the first occurrence — the run
   # cases precede the legacy flat ones, so the run's copy wins. Sorted by
-  # identity so the built page is stable across runs.
+  # identity so the built page is stable across runs. The identity is derived
+  # through `TestLens.CaseId` — the single authority for the `module::name` wire
+  # string — so this site no longer re-derives the `::` delimiter inline.
   defp dedupe(cases) do
     cases
     |> Enum.reduce({[], MapSet.new()}, fn c, {acc, seen} ->
-      id = TestLens.Diff.identity(c)
+      id = c |> TestLens.CaseId.from_case() |> TestLens.CaseId.to_string()
       if MapSet.member?(seen, id), do: {acc, seen}, else: {[c | acc], MapSet.put(seen, id)}
     end)
     |> elem(0)
-    |> Enum.sort_by(&TestLens.Diff.identity/1)
+    |> Enum.sort_by(fn c -> c |> TestLens.CaseId.from_case() |> TestLens.CaseId.to_string() end)
   end
 
   defp glob_cases(run_or_dir), do: run_or_dir |> Path.join("cases/*.json") |> Path.wildcard()
