@@ -44,7 +44,7 @@ defmodule TestLens do
   test.
   """
 
-  alias TestLens.Recorder
+  alias TestLens.{Phase, Recorder}
 
   @doc """
   Start the capture recorder. Call once from test_helper.exs before
@@ -106,7 +106,7 @@ defmodule TestLens do
 
   @doc "Mark the current stage. Subsequent captures are filed under it."
   def stage(stage) when is_atom(stage) or is_binary(stage) do
-    Recorder.put_stage(self(), to_string(stage))
+    Recorder.put_stage(self(), Phase.to_string(stage))
   end
 
   @doc """
@@ -170,7 +170,7 @@ defmodule TestLens do
     source = Macro.to_string(block)
 
     quote do
-      TestLens.__phase__(unquote(to_string(stage)), unquote(description), unquote(source))
+      TestLens.__phase__(unquote(Phase.to_string(stage)), unquote(description), unquote(source))
       unquote(block)
     end
   end

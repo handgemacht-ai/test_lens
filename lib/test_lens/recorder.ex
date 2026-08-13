@@ -30,7 +30,7 @@ defmodule TestLens.Recorder do
   use GenServer
   require Logger
 
-  alias TestLens.{Git, JSON}
+  alias TestLens.{Git, JSON, Phase}
 
   @name __MODULE__
 
@@ -124,7 +124,7 @@ defmodule TestLens.Recorder do
       file: relative(meta.file),
       line: meta.line,
       tags: meta.tags,
-      stage: "setup",
+      stage: Phase.to_string(:setup),
       captures: [],
       db_events: []
     }
@@ -152,7 +152,7 @@ defmodule TestLens.Recorder do
       update_acc(state, pid, fn acc ->
         # `value`/`paths` are already sanitized on the caller side (add_capture).
         entry = %{
-          stage: (stage_override && to_string(stage_override)) || acc.stage,
+          stage: (stage_override && Phase.to_string(stage_override)) || acc.stage,
           label: label,
           kind: kind,
           value: value,
@@ -246,7 +246,7 @@ defmodule TestLens.Recorder do
       file: relative(meta[:file]),
       line: meta[:line],
       tags: JSON.sanitize(meta[:tags] || []),
-      stage: "setup",
+      stage: Phase.to_string(:setup),
       captures: [],
       db_events: []
     }

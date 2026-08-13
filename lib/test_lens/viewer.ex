@@ -544,10 +544,15 @@ defmodule TestLens.Viewer do
       }
 
       function shape(c) {
-        const has = { setup: false, action: false, verify: false };
+        // Which refraction channels have at least one capture/db-event. Keyed off
+        // the shared PHASES table (one source with buildStages) instead of
+        // redeclaring { setup, action, verify } here; a stage outside the closed
+        // set is ignored, matching the previous `x.stage in has` membership check.
+        const has = {};
+        Object.keys(PHASES).forEach(name => { has[name] = false; });
         (c.captures || []).forEach(x => { if (x.stage in has) has[x.stage] = true; });
         (c.db_events || []).forEach(x => { if (x.stage in has) has[x.stage] = true; });
-        return `<span class="sh"><i class="${has.setup ? "in" : ""}"></i><i class="${has.action ? "act" : ""}"></i><i class="${has.verify ? "out" : ""}"></i></span>`;
+        return `<span class="sh">${Object.entries(PHASES).map(([name, p]) => `<i class="${has[name] ? p.cssClass : ""}"></i>`).join("")}</span>`;
       }
 
       function rowHtml(r) {

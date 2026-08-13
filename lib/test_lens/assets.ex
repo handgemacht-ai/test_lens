@@ -251,6 +251,20 @@ defmodule TestLens.Assets do
       // A null/missing duration returns "" so a timing-less case renders blank.
       const formatMs = us => (us != null && isFinite(us)) ? (us / 1000).toFixed(1) + "ms" : "";
 
+      // The closed enum of test phases, pinned 1:1 to TestLens.Phase (Elixir):
+      // one named table keyed by phase name → { label, cssClass, index }, so the
+      // refraction channels share one source instead of being redeclared as
+      // positional 4-tuples in buildStages and again as a bare {setup,action,
+      // verify} object in shape. Order is the refraction order (input → action →
+      // result); `Object.entries` preserves it for the stage layout. A stage
+      // outside the closed set still renders as a fallback channel (see
+      // buildStages), matching TestLens.stage/1's lenient acceptance.
+      const PHASES = {
+        setup:  { label: "INPUT",  cssClass: "in",  index: "I"   },
+        action: { label: "ACTION", cssClass: "act", index: "II"  },
+        verify: { label: "RESULT", cssClass: "out", index: "III" }
+      };
+
       /* ---------- syntax highlighting (highlight.js, XSS-safe) ----------
          Every helper hands hljs the PLAIN value; hljs escapes it and emits only
          its own <span> tags. We never build highlighted HTML by hand. */
@@ -471,15 +485,14 @@ defmodule TestLens.Assets do
           (ev.params && ev.params.length ? `<div class="ilabel">params</div>${codeBlock(jsonHtml(ev.params))}` : "") + "</div>";
       }
       function buildStages(c) {
-        const defs = [["setup", "INPUT", "in", "I"], ["action", "ACTION", "act", "II"], ["verify", "RESULT", "out", "III"]];
         const items = { setup: [], action: [], verify: [] };
         // Stamp the case's file:line onto each capture so a collapsed source block
         // can show where the test lives. Does not touch the embedded data payload.
         (c.captures || []).forEach(x => (items[x.stage] || (items[x.stage] = [])).push({ ...x, _t: "cap", _file: c.file, _line: c.line }));
         (c.db_events || []).forEach(x => (items[x.stage] || (items[x.stage] = [])).push({ ...x, _t: "db" }));
         Object.values(items).forEach(a => a.sort((p, q) => (p.seq || 0) - (q.seq || 0)));
-        const stages = defs.map(([k, label, key, idx]) => ({ key, label, idx, items: items[k] || [] }));
-        Object.keys(items).forEach(k => { if (!["setup", "action", "verify"].includes(k)) stages.push({ key: "act", label: k.toUpperCase(), idx: "&middot;", items: items[k] }); });
+        const stages = Object.entries(PHASES).map(([name, p]) => ({ key: p.cssClass, label: p.label, idx: p.index, items: items[name] || [] }));
+        Object.keys(items).forEach(k => { if (!Object.prototype.hasOwnProperty.call(PHASES, k)) stages.push({ key: "act", label: k.toUpperCase(), idx: "&middot;", items: items[k] }); });
         return stages;
       }
       function itemHtml(it) {
